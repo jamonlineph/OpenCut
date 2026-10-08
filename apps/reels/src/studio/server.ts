@@ -1,8 +1,10 @@
 #!/usr/bin/env bun
-import { existsSync, statSync } from "node:fs";
-import { basename, join, resolve, sep } from "node:path";
+import { existsSync, mkdirSync, renameSync, rmSync, statSync } from "node:fs";
+import { basename, extname, join, resolve, sep } from "node:path";
 
 import { analyzeMedia, readAnalysis } from "../core/analysis";
+import { Autopilot, listJobs, loadEnvFile, retryJob } from "../core/autopilot";
+import { directorLabel, pickDirector, reviseProject } from "../core/director";
 import { doctor } from "../core/capabilities";
 import { run, which } from "../core/exec";
 import type { EditOp } from "../core/ops";
@@ -15,7 +17,18 @@ import { mediaKindOf, workspace } from "../core/workspace";
 import index from "./index.html";
 
 const ws = workspace();
+loadEnvFile(ws);
 const port = Number(process.env.OPENCUT_STUDIO_PORT ?? 4317);
+
+// The Studio also runs the autopilot, so anything dropped into the auto-edit
+// folder (or onto the Studio with auto-edit on) is edited automatically.
+const autopilot = new Autopilot(ws, { log: (line) => console.log(`[autopilot] ${line}`) });
+const autopilotEnabled = !process.argv.includes("--no-autopilot") && process.env.OPENCUT_AUTOPILOT !== "0";
+const autopilotStarted = autopilotEnabled && autopilot.start();
+
+/** "Ask AI" requests running in this process, by project id. */
+type AskState = { status: "running" | "done" | "error"; instruction: string; step: string; summary?: string; error?: string };
+const asks = new Map<string, AskState>();
 
 const json = (data: unknown, status = 200) => Response.json(data, { status });
 const fail = (error: unknown, status = 400) => json({ error: error instanceof Error ? error.message : String(error) }, status);
@@ -102,6 +115,7 @@ function projectView(id: string) {
     texts: project.texts.map((t) => ({ ...t, ...resolveSpan(t) })),
     renders: listRenders(ws, id).map((r) => ({ file: r.file, url: mediaUrl(join("projects", id, r.file)), size: r.size, mtime: r.mtime })),
     revisions: listRevisions(ws, id),
+    ai: asks.get(id) ?? null,
   };
 }
 
@@ -141,11 +155,58 @@ const server = Bun.serve({
         })),
     },
     "/api/doctor": { GET: () => handle(() => doctor(ws)) },
+    "/api/autopilot": {
+      GET: () =>
+        handle(() => {
+          const director = pickDirector(ws);
+          return {
+            enabled: autopilotEnabled,
+            watching: autopilot.watching,
+            elsewhere: autopilotEnabled && !autopilotStarted,
+            director,
+            directorLabel: directorLabel(director),
+            folder: ws.autoEdit,
+            outbox: ws.outbox,
+            jobs: listJobs(ws, 15).map((j) => ({ ...j, log: j.log.slice(-6) })),
+          };
+        }),
+    },
+    "/api/autopilot/retry": {
+      POST: (req) =>
+        handle(async () => {
+          const { id } = (await req.json()) as { id: string };
+          retryJob(ws, id).catch(() => {});
+          await Bun.sleep(300);
+        }),
+    },
+    "/api/upload/commit": {
+      // Turns a finished upload batch into one auto-edit drop (video + photos + notes together).
+      POST: (req) =>
+        handle(async () => {
+          const { batch, name } = (await req.json()) as { batch: string; name: string };
+          const from = join(ws.autoEdit, `.batch-${batch.replace(/\W/g, "")}`);
+          if (!existsSync(from)) throw new Error("Upload batch not found.");
+          const clean = basename(name, extname(name)).replace(/[^\w.\- ()]+/g, "_") || "drop";
+          let dest = join(ws.autoEdit, clean);
+          for (let n = 2; existsSync(dest); n++) dest = join(ws.autoEdit, `${clean} ${n}`);
+          renameSync(from, dest);
+          return { folder: basename(dest) };
+        }),
+    },
     "/api/upload": {
       PUT: (req) =>
         handle(async () => {
-          const name = basename(new URL(req.url).searchParams.get("name") ?? "").replace(/[^\w.\- ()]+/g, "_");
-          if (!name || !mediaKindOf(name)) throw new Error("Only video, image and audio files can be added.");
+          const params = new URL(req.url).searchParams;
+          const name = basename(params.get("name") ?? "").replace(/[^\w.\- ()]+/g, "_");
+          const batch = params.get("batch")?.replace(/\W/g, "");
+          if (!name || !(mediaKindOf(name) || (batch && /\.(txt|md)$/i.test(name)))) throw new Error("Only video, image and audio files can be added.");
+          if (batch) {
+            // Hidden folder: the autopilot ignores it until the batch is committed.
+            const dir = join(ws.autoEdit, `.batch-${batch}`);
+            mkdirSync(dir, { recursive: true });
+            await Bun.write(join(dir, name), new Response(req.body));
+            return { file: name };
+          }
           let dest = join(ws.inbox, name);
           for (let n = 2; existsSync(dest); n++) dest = join(ws.inbox, `${n}-${name}`);
           await Bun.write(dest, new Response(req.body));
@@ -208,6 +269,21 @@ const server = Bun.serve({
           return { state: readState(ws, req.params.id) };
         }),
     },
+    "/api/projects/:id/ask": {
+      POST: (req) =>
+        handle(async () => {
+          const id = req.params.id;
+          const { instruction } = (await req.json()) as { instruction: string };
+          if (!instruction?.trim()) throw new Error("Tell the AI what to change.");
+          if (asks.get(id)?.status === "running") throw new Error("The AI is still working on the last request.");
+          const state: AskState = { status: "running", instruction, step: "Starting…" };
+          asks.set(id, state);
+          reviseProject(ws, id, instruction, { onStep: (step) => (state.step = step) })
+            .then((r) => Object.assign(state, { status: "done", step: "Done", summary: [r.summary, ...r.warnings].join("\n") }))
+            .catch((e) => Object.assign(state, { status: "error", step: "Failed", error: e instanceof Error ? e.message : String(e) }));
+          return { ok: true };
+        }),
+    },
     "/api/projects/:id/reveal": {
       POST: (req) =>
         handle(async () => {
@@ -237,6 +313,13 @@ const server = Bun.serve({
 
 console.log(`OpenCut Studio → http://localhost:${server.port}`);
 console.log(`Drop videos into ${ws.inbox} or onto the Studio window.`);
+if (autopilotStarted) console.log(`Autopilot (${directorLabel(pickDirector(ws))}): drop videos into ${ws.autoEdit} → finished reels in ${ws.outbox}`);
+else if (autopilotEnabled) console.log("Autopilot is already running in another OpenCut process.");
+// Clean up upload batches left behind by a closed browser tab.
+for (const name of existsSync(ws.autoEdit) ? Array.from(new Bun.Glob(".batch-*").scanSync({ cwd: ws.autoEdit, onlyFiles: false, dot: true })) : []) {
+  const dir = join(ws.autoEdit, name);
+  if (Date.now() - statSync(dir).mtimeMs > 6 * 3600_000) rmSync(dir, { recursive: true, force: true });
+}
 if (process.argv.includes("--open")) {
   const open = which("open");
   if (open) Bun.spawn([open, `http://localhost:${server.port}`]);

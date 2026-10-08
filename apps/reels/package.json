@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "start": "bun src/studio/server.ts --open",
     "studio": "bun src/studio/server.ts",
+    "autopilot": "bun src/cli.ts autopilot",
     "mcp": "bun src/mcp/index.ts",
     "reels": "bun src/cli.ts",
     "setup": "bun src/cli.ts setup",
@@ -12,6 +14,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.132.1",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@napi-rs/canvas": "^1.0.10",
     "react": "^19.3.0",

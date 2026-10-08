@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 
+import type { Job } from "../core/autopilot";
 import type { EditOp } from "../core/ops";
 import { cropRect } from "../core/render/graph";
 import type { ProjectView, StudioState } from "./server";
@@ -41,10 +42,37 @@ function useHashRoute(): [string | null, (id: string | null) => void] {
 
 type Upload = { name: string; progress: number };
 
-function uploadFile(file: File, onProgress: (p: number) => void): Promise<void> {
+type AutopilotInfo = {
+  enabled: boolean;
+  watching: boolean;
+  elsewhere: boolean;
+  director: string;
+  directorLabel: string;
+  folder: string;
+  outbox: string;
+  jobs: Job[];
+};
+
+const readPref = (key: string, fallback: boolean) => {
+  try {
+    const v = localStorage.getItem(key);
+    return v === null ? fallback : v === "1";
+  } catch {
+    return fallback;
+  }
+};
+const writePref = (key: string, value: boolean) => {
+  try {
+    localStorage.setItem(key, value ? "1" : "0");
+  } catch {
+    // Private mode: the toggle just won't be remembered.
+  }
+};
+
+function uploadFile(file: File, onProgress: (p: number) => void, batch?: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open("PUT", `/api/upload?name=${encodeURIComponent(file.name)}`);
+    xhr.open("PUT", `/api/upload?name=${encodeURIComponent(file.name)}${batch ? `&batch=${batch}` : ""}`);
     xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
     xhr.onload = () => (xhr.status < 300 ? resolve() : reject(new Error(JSON.parse(xhr.responseText || "{}").error ?? "Upload failed")));
     xhr.onerror = () => reject(new Error("Upload failed"));
@@ -66,27 +94,48 @@ function App() {
     window.setTimeout(() => setToast((t) => (t?.text === text ? null : t)), err ? 6000 : 2800);
   }, []);
 
-  const refresh = useCallback(() => api<StudioState>("/api/state").then(setState).catch(() => {}), []);
+  const [autopilot, setAutopilot] = useState<AutopilotInfo | null>(null);
+  const [autoEdit, setAutoEditState] = useState(() => readPref("opencut.autoEdit", true));
+  const setAutoEdit = (v: boolean) => (setAutoEditState(v), writePref("opencut.autoEdit", v));
+
+  const refresh = useCallback(() => {
+    api<StudioState>("/api/state").then(setState).catch(() => {});
+    api<AutopilotInfo>("/api/autopilot").then(setAutopilot).catch(() => {});
+  }, []);
   useEffect(() => {
     refresh();
     const id = window.setInterval(refresh, 3000);
     return () => window.clearInterval(id);
   }, [refresh]);
 
+  const autoEditing = autoEdit && Boolean(autopilot?.enabled);
+
   const upload = useCallback(
     async (files: File[]) => {
+      const video = files.find((f) => /\.(mp4|mov|m4v|mkv|webm|avi)$/i.test(f.name));
+      // With auto-edit on, a drop that includes a video becomes one autopilot job.
+      const batch = autoEditing && video ? `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}` : undefined;
       for (const file of files) {
         setUploads((u) => [...u, { name: file.name, progress: 0 }]);
         try {
-          await uploadFile(file, (p) => setUploads((u) => u.map((x) => (x.name === file.name ? { ...x, progress: p } : x))));
+          await uploadFile(file, (p) => setUploads((u) => u.map((x) => (x.name === file.name ? { ...x, progress: p } : x))), batch);
         } catch (e) {
           notify(`${file.name}: ${(e as Error).message}`, true);
         }
         setUploads((u) => u.filter((x) => x.name !== file.name));
+        if (!batch) refresh();
+      }
+      if (batch && video) {
+        try {
+          await api("/api/upload/commit", { method: "POST", body: { batch, name: video.name } });
+          notify(`Auto-editing ${video.name}… it will appear under Autopilot`);
+        } catch (e) {
+          notify((e as Error).message, true);
+        }
         refresh();
       }
     },
-    [notify, refresh],
+    [notify, refresh, autoEditing],
   );
 
   useEffect(() => {
@@ -123,7 +172,18 @@ function App() {
 
   return (
     <div className="app">
-      <Sidebar state={state} route={route} go={go} uploads={uploads} upload={upload} notify={notify} refresh={refresh} />
+      <Sidebar
+        state={state}
+        route={route}
+        go={go}
+        uploads={uploads}
+        upload={upload}
+        notify={notify}
+        refresh={refresh}
+        autopilot={autopilot}
+        autoEdit={autoEdit}
+        setAutoEdit={setAutoEdit}
+      />
       <main className="main">
         {route ? (
           <ProjectScreen key={route} id={route} state={state} notify={notify} onDeleted={() => (go(null), refresh())} />
@@ -131,7 +191,11 @@ function App() {
           <Home state={state} />
         )}
       </main>
-      {dragging && <div className="drag-overlay">Drop videos, photos or music to add them to your inbox</div>}
+      {dragging && (
+        <div className="drag-overlay">
+          {autoEditing ? "Drop a video (with photos or a notes.txt) and the AI edits it for you" : "Drop videos, photos or music to add them to your inbox"}
+        </div>
+      )}
       {toast && <div className={`toast ${toast.err ? "err" : ""}`}>{toast.text}</div>}
     </div>
   );
@@ -147,8 +211,11 @@ function Sidebar(props: {
   upload: (files: File[]) => void;
   notify: (t: string, err?: boolean) => void;
   refresh: () => void;
+  autopilot: AutopilotInfo | null;
+  autoEdit: boolean;
+  setAutoEdit: (v: boolean) => void;
 }) {
-  const { state, route, go, uploads, upload, notify, refresh } = props;
+  const { state, route, go, uploads, upload, notify, refresh, autopilot, autoEdit, setAutoEdit } = props;
   const [selected, setSelected] = useState<string[]>([]);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -182,14 +249,14 @@ function Sidebar(props: {
       </div>
       <div className="sidebar-scroll">
         <div className="dropzone" onClick={() => fileInput.current?.click()}>
-          Drop videos & images here
-          <div className="hint">or click to choose files</div>
+          {autoEdit && autopilot?.enabled ? "Drop a video to auto-edit it" : "Drop videos & images here"}
+          <div className="hint">{autoEdit && autopilot?.enabled ? "add photos or a notes.txt in the same drop" : "or click to choose files"}</div>
           <input
             ref={fileInput}
             type="file"
             multiple
             hidden
-            accept="video/*,image/*,audio/*"
+            accept="video/*,image/*,audio/*,.txt,.md"
             onChange={(e) => e.target.files && upload([...e.target.files])}
           />
         </div>
@@ -201,6 +268,8 @@ function Sidebar(props: {
             </div>
           </div>
         ))}
+
+        <AutopilotPanel info={autopilot} autoEdit={autoEdit} setAutoEdit={setAutoEdit} go={go} notify={notify} refresh={refresh} />
 
         <div className="section-title">
           <span>Videos</span>
@@ -267,6 +336,95 @@ function Sidebar(props: {
   );
 }
 
+// ───────────────────────── autopilot
+
+const JOB_LABEL: Record<Job["status"], string> = {
+  importing: "importing",
+  analyzing: "transcribing",
+  editing: "editing",
+  rendering: "rendering",
+  done: "ready",
+  error: "failed",
+};
+
+function AutopilotPanel(props: {
+  info: AutopilotInfo | null;
+  autoEdit: boolean;
+  setAutoEdit: (v: boolean) => void;
+  go: (id: string | null) => void;
+  notify: (t: string, err?: boolean) => void;
+  refresh: () => void;
+}) {
+  const { info, autoEdit, setAutoEdit, go, notify, refresh } = props;
+  if (!info) return null;
+  const reveal = (path: string) => api("/api/reveal", { method: "POST", body: { path } }).catch((e) => notify(e.message, true));
+  const status = !info.enabled
+    ? "Off (Studio started with --no-autopilot)."
+    : info.elsewhere
+      ? "Running in another OpenCut process."
+      : `${info.directorLabel} edits every video you drop.`;
+  return (
+    <>
+      <div className="section-title">
+        <span>Autopilot</span>
+        <span className="row" style={{ gap: 0 }}>
+          <button className="ghost" title="Open the auto-edit drop folder in Finder" onClick={() => reveal("auto-edit")}>
+            Drop folder
+          </button>
+          <button className="ghost" title="Open finished reels in Finder" onClick={() => reveal("outbox")}>
+            Outbox
+          </button>
+        </span>
+      </div>
+      <label className="autopilot-toggle">
+        <input type="checkbox" checked={autoEdit} disabled={!info.enabled} onChange={(e) => setAutoEdit(e.target.checked)} />
+        <span>
+          Auto-edit drops with AI
+          <div className="hint">{status}</div>
+          {info.director === "basic" && info.enabled && (
+            <div className="hint">No AI found: install Claude Code or add an API key to get AI edits.</div>
+          )}
+        </span>
+      </label>
+      <div className="jobs">
+        {info.jobs.slice(0, 6).map((j) => (
+          <div key={j.id} className={`job ${j.status}`}>
+            <div className="row" style={{ justifyContent: "space-between", flexWrap: "nowrap" }}>
+              <span className="media-name">{j.name}</span>
+              <span className={`pill ${j.status === "done" ? "ok" : j.status === "error" ? "err" : "warn"}`}>{JOB_LABEL[j.status]}</span>
+            </div>
+            {j.status !== "done" && j.status !== "error" && <div className="hint">{j.step}</div>}
+            {j.status === "error" && (
+              <div className="hint">
+                {j.error}{" "}
+                <button
+                  className="ghost"
+                  onClick={() =>
+                    api("/api/autopilot/retry", { method: "POST", body: { id: j.id } })
+                      .then(refresh)
+                      .catch((e) => notify(e.message, true))
+                  }
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+            {j.status === "done" && (
+              <div className="row">
+                {j.outputs.map((o) => (
+                  <button key={o.project} className="ghost job-link" onClick={() => go(o.project)} title={o.file}>
+                    ▶ {o.title}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
 // ───────────────────────── home
 
 function Home({ state }: { state: StudioState | null }) {
@@ -277,14 +435,25 @@ function Home({ state }: { state: StudioState | null }) {
   return (
     <div className="home">
       <h2>Make a reel</h2>
+      <h3>Hands-free</h3>
       <ol>
-        <li>Drop your talking-head videos (and any photos or music) anywhere on this window, or into <code>{state?.root}/inbox</code>.</li>
-        <li>Tick the videos on the left and press <b>New reel</b>. OpenCut transcribes them and finds the silences.</li>
-        <li>Press <b>Auto edit</b>, or ask Claude / Codex / Antigravity: <i>“Make a reel from my newest video in OpenCut.”</i> You'll see the AI's edits appear here live.</li>
-        <li>Click words in the transcript to cut or restore them, then <b>Render</b>.</li>
+        <li>
+          Drop a talking-head video on this window (keep <b>Auto-edit drops with AI</b> on), or into <code>{state?.root}/auto-edit</code> in Finder.
+          Add photos, music or a <code>notes.txt</code> (what it's about, who it's for, your call to action) in the same drop.
+        </li>
+        <li>The AI transcribes it, understands it, cuts retakes and silences, picks the hook, places your photos, adds captions and writes the caption and hashtags.</li>
+        <li>
+          The finished MP4 and its publish copy land in <code>{state?.root}/outbox</code>, and you get a notification. Open it here to tweak, or ask the AI for changes in the <b>AI ✨</b> tab.
+        </li>
+      </ol>
+      <h3>Hands-on</h3>
+      <ol>
+        <li>Turn auto-edit off and drop videos to add them to your library, tick them on the left and press <b>New reel</b>.</li>
+        <li>Press <b>Auto edit</b>, click words in the transcript to cut or restore them, then <b>Render</b>.</li>
+        <li>Or ask Claude / Codex / Antigravity: <i>“Make a reel from my newest video in OpenCut.”</i> You'll see its edits appear here live.</li>
       </ol>
       <p className="hint">
-        Your editing rules for the AI live in <code>{state?.root}/STYLE.md</code>.
+        Your editing rules and “about me” for the AI live in <code>{state?.root}/STYLE.md</code>.
       </p>
       <h3>Setup check</h3>
       <div className="checks">
@@ -306,7 +475,8 @@ function Home({ state }: { state: StudioState | null }) {
 
 // ───────────────────────── project
 
-type Tab = "transcript" | "style" | "layers" | "renders";
+type Tab = "transcript" | "ai" | "style" | "layers" | "renders";
+const TAB_LABEL: Record<Tab, string> = { transcript: "Transcript", ai: "AI ✨", style: "Style", layers: "Layers", renders: "Renders" };
 
 function ProjectScreen({ id, state, notify, onDeleted }: { id: string; state: StudioState | null; notify: (t: string, err?: boolean) => void; onDeleted: () => void }) {
   const [view, setView] = useState<ProjectView | null>(null);
@@ -476,9 +646,10 @@ function ProjectScreen({ id, state, notify, onDeleted }: { id: string; state: St
         </div>
         <div className="panel">
           <div className="tabs">
-            {(["transcript", "style", "layers", "renders"] as Tab[]).map((t) => (
+            {(Object.keys(TAB_LABEL) as Tab[]).map((t) => (
               <button key={t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>
-                {t[0]!.toUpperCase() + t.slice(1)}
+                {TAB_LABEL[t]}
+                {t === "ai" && view.ai?.status === "running" ? " …" : ""}
               </button>
             ))}
           </div>
@@ -486,6 +657,7 @@ function ProjectScreen({ id, state, notify, onDeleted }: { id: string; state: St
             {tab === "transcript" && <TranscriptPanel view={view} time={time} edit={edit} seek={(t) => (setTime(t), setMode("live"))} inbox={state?.inbox ?? []} />}
             {tab === "style" && <StylePanel view={view} edit={edit} inbox={state?.inbox ?? []} />}
             {tab === "layers" && <LayersPanel view={view} edit={edit} time={time} inbox={state?.inbox ?? []} />}
+            {tab === "ai" && <AiPanel view={view} id={id} edit={edit} notify={notify} reload={load} />}
             {tab === "renders" && <RendersPanel view={view} id={id} notify={notify} onDeleted={onDeleted} />}
           </div>
         </div>
@@ -964,6 +1136,101 @@ function LayersPanel({ view, edit, time, inbox }: { view: ProjectView; edit: (op
   );
 }
 
+// ───────────────────────── AI
+
+const SUGGESTIONS = [
+  "Make the hook punchier",
+  "Make it shorter, under 30 seconds",
+  "Cut the slow intro",
+  "Put my photos where I talk about them",
+  "Use the clean caption style",
+];
+
+function AiPanel({ view, id, edit, notify, reload }: { view: ProjectView; id: string; edit: (ops: EditOp[], label?: string) => void; notify: (t: string, err?: boolean) => void; reload: () => void }) {
+  const [brief, setBrief] = useState(view.project.brief);
+  const [instruction, setInstruction] = useState("");
+  const savedBrief = useRef(view.project.brief);
+  useEffect(() => {
+    // Follow changes made elsewhere (e.g. by the AI) unless the user is mid-edit.
+    if (view.project.brief !== savedBrief.current) {
+      setBrief((b) => (b === savedBrief.current ? view.project.brief : b));
+      savedBrief.current = view.project.brief;
+    }
+  }, [view.project.brief]);
+  const ai = view.ai;
+  const running = ai?.status === "running";
+  const ask = async (text: string) => {
+    if (!text.trim()) return;
+    try {
+      await api(`/api/projects/${id}/ask`, { method: "POST", body: { instruction: text.trim() } });
+      setInstruction("");
+      reload();
+    } catch (e) {
+      notify((e as Error).message, true);
+    }
+  };
+  return (
+    <>
+      <div className="field">
+        <label>Ask the AI to change this reel</label>
+        <textarea
+          rows={3}
+          placeholder="e.g. Start with the part about pricing, and add my logo.png at the end"
+          value={instruction}
+          disabled={running}
+          onChange={(e) => setInstruction(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && (e.metaKey || e.ctrlKey) && ask(instruction)}
+        />
+        <div className="row">
+          <button className="primary" disabled={running || !instruction.trim()} onClick={() => ask(instruction)}>
+            {running ? "Working…" : "Ask AI"}
+          </button>
+          {SUGGESTIONS.map((sug) => (
+            <button key={sug} className="chip" disabled={running} onClick={() => ask(sug)}>
+              {sug}
+            </button>
+          ))}
+        </div>
+        {ai && (
+          <div className={`ai-status ${ai.status}`}>
+            <b>“{ai.instruction}”</b>
+            <div>{ai.status === "running" ? ai.step : ai.status === "done" ? ai.summary : ai.error}</div>
+          </div>
+        )}
+      </div>
+
+      <div className="field">
+        <label>What is this reel about? (the AI reads this)</label>
+        <textarea
+          rows={4}
+          placeholder="Topic, who it's for, the call to action… e.g. Tips for new café owners. CTA: book a free consult, link in bio."
+          value={brief}
+          onChange={(e) => setBrief(e.target.value)}
+        />
+        <div className="row">
+          <button disabled={brief === view.project.brief} onClick={() => ((savedBrief.current = brief), edit([{ op: "brief", text: brief }], "Saved"))}>
+            Save
+          </button>
+          <span className="hint">Tip: drop a notes.txt with your video and it lands here automatically.</span>
+        </div>
+      </div>
+
+      <div className="field">
+        <label>Publish copy</label>
+        <textarea readOnly rows={6} value={view.project.notes || "The AI writes a title, caption and hashtags here when it edits."} />
+        <div className="row">
+          <button
+            disabled={!view.project.notes}
+            onClick={() => navigator.clipboard.writeText(view.project.notes).then(() => notify("Copied"), () => notify("Couldn't copy", true))}
+          >
+            Copy
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
 // ───────────────────────── renders
 
 function RendersPanel({ view, id, notify, onDeleted }: { view: ProjectView; id: string; notify: (t: string, err?: boolean) => void; onDeleted: () => void }) {
@@ -991,12 +1258,6 @@ function RendersPanel({ view, id, notify, onDeleted }: { view: ProjectView; id: 
               {r.file.replace("renders/", "")} · {fmtSize(r.size)}
             </a>
           ))}
-        </div>
-      )}
-      {view.project.notes && (
-        <div className="field">
-          <label>Notes from your AI (title, caption, hashtags)</label>
-          <textarea readOnly value={view.project.notes} rows={6} />
         </div>
       )}
       <div className="field">

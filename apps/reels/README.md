@@ -1,23 +1,28 @@
 # OpenCut Reels
 
-A fast, local editor for vertical short-form video (Reels, Shorts, TikTok), built
-to be driven by an AI assistant. Drop your talking-head videos and images in, then
-either click around in **OpenCut Studio** or ask Claude, Codex or Antigravity to
-edit for you through the **MCP server**. Both work on the same projects at the
-same time, and the Studio shows the AI's edits live.
+A fast, local editor for vertical short-form video (Reels, Shorts, TikTok) that an
+AI can drive. **Drop a talking-head video and get a finished reel back**: the AI
+watches and listens to it, understands what it's about, cuts it, adds captions,
+places your photos, and writes the caption and hashtags. You can also edit by hand
+in **OpenCut Studio**, or chat with Claude, Codex or Antigravity through the
+**MCP server**. All three work on the same projects.
 
 What it does:
 
 - **Transcribes your voice** on your Mac (whisper.cpp), with timing for every word
-- **Cuts silences and filler words** ("um", "uh") automatically
-- **Cuts by word**: delete a sentence, keep the best take, move the best line to the start as the hook
+- **Understands the context**: what you say, frames of the footage, the photos you drop, your `notes.txt`, and your style guide and "about me"
+- **Cuts silences, filler words, false starts and retakes** (keeps your last, clean take)
+- **Finds the hook** and moves the strongest line to the start, with an on-screen hook title
+- **Cuts several shorts** from one long video when it holds several ideas
 - **Captions** that highlight each word as you say it (bold, clean or minimal styles)
 - **Vertical 9:16 framing** from any video, with punch-in zooms to hide jump cuts
-- **Images and B-roll** you drop in, pinned to the words they belong to
-- **Hook titles**, background music that dips while you talk, loudness set for social apps (-14 LUFS)
-- **Undo** for every change, and an instant preview before you render
+- **Images and B-roll** pinned to the words they belong to
+- **Music** that dips while you talk, loudness set for social apps (-14 LUFS)
+- **Publish copy**: title, caption and hashtags in your tone
+- **Undo** for every change, an instant preview, and "ask the AI" revisions
 
-Everything runs on your computer. Nothing is uploaded.
+Your media stays on your computer. The AI sees only what it needs: the transcript,
+a few frames and your photos.
 
 ---
 
@@ -30,23 +35,72 @@ brew install ffmpeg whisper-cpp oven-sh/bun/bun
 
 cd path/to/OpenCut/apps/reels
 bun install
-bun run setup        # downloads the speech model (~550 MB) and checks everything
+bun run setup              # downloads the speech model (~550 MB) and checks everything
+bun run reels install-agent  # start OpenCut at login, so drops work any time
 ```
 
-`bun run setup` ends with a checklist. Every line should have a ✓.
+`bun run setup` ends with a checklist. Every line should have a ✓, and the last line
+says which AI will edit your drops (see [Which AI edits](#which-ai-edits)).
 
 > **Model choice.** The default `large-v3-turbo-q5_0` is accurate and fast on Apple
 > Silicon (M1 or newer), and handles English, Filipino/Tagalog, Spanish and most
 > other languages. On an Intel Mac, use `bun run setup -- --model small.en` (English only).
 
-## Daily use: OpenCut Studio
+## Hands-free: drop a video, get a reel
+
+With OpenCut running (`install-agent` above, or `bun start`):
+
+1. **Drop** a video into `~/Movies/OpenCut/auto-edit` in Finder, or onto the Studio window with **Auto-edit drops with AI** on.
+   - **Add context** in the same drop: photos to show, a music track, and a `notes.txt` saying what the video is about, who it's for and your call to action.
+   - **Several clips for one reel?** Put them in a folder and drop the folder. Clips play in name order, and photos and notes inside go with them.
+2. OpenCut transcribes the video, the AI decides the edit (and checks its own preview), and the final render is made.
+3. You get a **notification**. Each finished reel is in `~/Movies/OpenCut/outbox`: `2026-10-08 My title.mp4`, plus a `.txt` file with the title, caption and hashtags.
+
+Open the reel in the Studio to tweak it, or go to the **AI ✨** tab and ask: *"make the hook punchier"*,
+*"cut the part about pricing"*, *"put logo.png at the end"*.
+
+Run it once from Terminal: `bun run reels auto-edit talk.mov photo.jpg notes.txt`.
+See what it did: `bun run reels jobs` (retry a failed one with `bun run reels retry JOB`).
+
+### Which AI edits
+
+`settings.json` → `autopilot.director` (default `"auto"` picks the first available):
+
+| Director | Needs | Notes |
+| --- | --- | --- |
+| `claude-api` | `ANTHROPIC_API_KEY` in `~/Movies/OpenCut/.env` | Fastest and most predictable. Plans the edit, then reviews its own preview frames and fixes problems. Pay-per-use (a few cents per reel). |
+| `claude-code` | [Claude Code](https://claude.ai/code) installed and logged in | Uses your Claude subscription. Runs headless with only OpenCut's tools, and renders, looks at and fixes its work like in a chat. |
+| `codex` | Codex CLI installed and logged in | Same idea with your ChatGPT plan (experimental). |
+| `basic` | nothing | No AI: removes silences, fillers and retakes, adds zooms and captions. |
+
+The `.env` file is for keys, because apps started at login don't see your Terminal settings:
+
+```sh
+echo 'ANTHROPIC_API_KEY=sk-ant-...' >> ~/Movies/OpenCut/.env
+```
+
+Other `autopilot` settings: `maxReels` (most reels from one video, default 3), `review`
+(let the AI check its preview, default on), `notify`, `agentTimeoutMinutes`, and
+`webhookUrl`. A webhook receives a JSON summary of every finished reel (title,
+caption, hashtags, file path), so you can connect Make, Zapier, n8n or a
+Monday.com board.
+
+### Teach it about you
+
+`~/Movies/OpenCut/STYLE.md` starts with an **About me** section (niche, audience,
+tone, call to action, handle), followed by your editing rules: pacing, hook,
+captions, zooms, images, music, length and publishing. Every AI reads it before
+editing. Fill it in once and the AI's choices get much better. You can also tell
+the AI "remember that I like …" in chat, and it updates the file.
+
+## Hands-on: OpenCut Studio
 
 ```sh
 cd path/to/OpenCut/apps/reels
-bun run studio -- --open        # opens http://localhost:4317
+bun start        # opens http://localhost:4317 (already running if you used install-agent)
 ```
 
-1. **Drop** videos, photos and music anywhere on the Studio window. You can also put them in `~/Movies/OpenCut/inbox` with Finder.
+1. Turn **Auto-edit drops with AI** off, then **drop** videos, photos and music on the window to add them to your library (`~/Movies/OpenCut/inbox`).
 2. **Tick** the video(s) on the left and press **New reel**. Transcription starts right away; a 2-minute clip takes well under a minute on an M-series Mac.
 3. Press **✨ Auto edit**. This removes silences and um/uh, adds alternating zooms and turns captions on.
 4. **Fine-tune** in the panel on the right:
@@ -88,23 +142,21 @@ face, a badly placed image), fixes them and renders the final. Keep the Studio o
 to watch it work. Your client may also offer the built-in prompts **make_reel** and
 **clips_from_long_video**.
 
-### Teach it your style
-
-`~/Movies/OpenCut/STYLE.md` holds your editing rules: pacing, hook, captions,
-zooms, image placement and length. Every AI reads it before editing. Edit it by hand,
-or tell the AI "remember that I like …" and it will update the file.
-
 ## Where your files live
 
 ```
 ~/Movies/OpenCut/
-  inbox/            drop zone (videos, photos, music)
+  auto-edit/        drop here for hands-free editing
+  outbox/           finished reels + their caption/hashtags .txt
+  inbox/            your library (videos, photos, music)
   brand/fonts/      optional .ttf/.otf fonts for captions
   brand/music/      optional music library
   projects/<reel>/  project.json, history/ (undo), renders/*.mp4
   models/           the speech model
-  STYLE.md          your editing rules for the AI
-  settings.json     language, model, encoder, silence defaults
+  STYLE.md          about you + your editing rules, read by the AI
+  settings.json     language, model, encoder, silence defaults, autopilot
+  .env              API keys (optional)
+  .autopilot/       job history, logs (studio.log), notes from drops
 ```
 
 Set `OPENCUT_WORKSPACE=/some/other/folder` to use another location.
@@ -123,9 +175,9 @@ bun run reels transcript morning-routine
 bun run reels render morning-routine --final
 ```
 
-`new … --auto --render` runs the whole pipeline without the Studio or an AI, which
-suits folder watchers, Shortcuts or scheduled jobs. The AI tools work on these
-projects too.
+`new … --auto --render` runs the whole pipeline without the Studio or an AI.
+`auto-edit FILE…` runs the full AI pipeline once, and `ask PROJECT "…"` revises a reel.
+All of these suit Shortcuts or scheduled jobs.
 
 ## Troubleshooting
 
@@ -138,6 +190,9 @@ projects too.
 | Captions use the wrong font | Put the font file in `~/Movies/OpenCut/brand/fonts` and set it with the captions `font` option |
 | Live preview is black | The browser can't play that video format. Render a preview instead, or use Safari for iPhone HEVC clips |
 | Something rendered oddly | Each project folder has `last-render.sh`, the exact FFmpeg command used |
+| A drop wasn't picked up | OpenCut must be running (`bun start` or `install-agent`). Check the Autopilot panel in the Studio, `bun run reels jobs`, and `~/Movies/OpenCut/.autopilot/studio.log` |
+| The AI says "basic" | Install and log in to Claude Code, or add `ANTHROPIC_API_KEY` to `~/Movies/OpenCut/.env`, then restart OpenCut |
+| Stop starting at login | `bun run reels uninstall-agent` |
 
 Captions are drawn with libass when your FFmpeg has it, and with a built-in renderer
 when it doesn't (Homebrew's FFmpeg currently doesn't), so both work.
@@ -145,19 +200,23 @@ when it doesn't (Homebrew's FFmpeg currently doesn't), so both work.
 ## How it works
 
 ```
-inbox/ ──► analysis (cached per file)          AI client ──MCP──► src/mcp
-           ffprobe · whisper.cpp words ·                              │
-           silencedetect · thumbnails          Studio (browser) ──► src/studio
-                    │                                                 │
-                    └──────────► project.json (timeline) ◄────────────┘
-                                         │  edits by word id, versioned
-                                         ▼
-                        src/core/render: one FFmpeg graph
+auto-edit/ ──► autopilot: import → analyze → director → final render → outbox/ + notification + webhook
+                                              │
+             transcript with word ids · frames · your photos · notes.txt · STYLE.md
+                                              │
+                        Claude API ─ plan (JSON) ─┐   Claude Code / Codex ─ MCP tools ─┐
+                                                  ▼                                    ▼
+inbox/ ──► analysis (cached per file) ──► project.json (timeline) ◄── Studio (browser) / AI chat (MCP)
+           ffprobe · whisper.cpp words ·          │  edits by word id, versioned
+           silencedetect · thumbnails             ▼
+                         src/core/render: one FFmpeg graph
                  cuts · 9:16 crop · zooms · overlays · captions · music · loudness
 ```
 
-- `src/core`: workspace, analysis, the project schema (zod), edit operations, transcript view, renderer
-- `src/mcp`: the MCP server (stdio), 13 tools plus a style-guide resource and two prompts
+- `src/core`: workspace, analysis, the project schema (zod), edit operations, retake detection, transcript view, renderer
+- `src/core/director`: the AI directors. Context gathering, the plan schema and plan → edit ops, Claude API (structured output + self-review), and headless Claude Code / Codex over MCP
+- `src/core/autopilot.ts`: drop-folder watcher, jobs, outbox delivery, notifications and webhook
+- `src/mcp`: the MCP server (stdio), 14 tools plus a style-guide resource and two prompts
 - `src/studio`: Bun server and React UI, with an instant preview that plays the edit without rendering
 - `src/cli.ts`: setup, doctor and headless commands
 

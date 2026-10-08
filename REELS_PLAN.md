@@ -18,10 +18,10 @@ The plan below has been implemented as **`apps/reels`**. Setup and usage are in
 | 1 Ingest + analysis | ✅ ffprobe, whisper.cpp word timings, adaptive silence detection, thumbnails, HEIC via `sips`, all cached per file | `src/core/analysis.ts`, `transcribe.ts`, `silence.ts` |
 | 2 Timeline + renderer | ✅ zod project schema, word-id edit ops, one-pass FFmpeg graph, captions via libass or a built-in renderer | `src/core/schema.ts`, `ops.ts`, `render/*` |
 | 3 MCP server | ✅ 13 tools, a style-guide resource and 2 prompts; tested with a real MCP client | `src/mcp/index.ts` |
-| 4 Shorts intelligence | ✅ silences, fillers, hook to start, alternating zooms, image/B-roll overlays, music ducking, -14 LUFS. ⏳ face-tracking reframe, beat sync | `src/core/ops.ts` |
+| 4 Shorts intelligence | ✅ silences, fillers, retakes/false starts, hook to start, multi-reel from long videos, alternating zooms, image/B-roll overlays, music ducking, -14 LUFS. ⏳ face-tracking reframe, beat sync | `src/core/ops.ts`, `src/core/retakes.ts` |
 | 5 Style + recipes | ✅ `STYLE.md` read by every agent, 3 caption styles, `make_reel` / `clips_from_long_video` prompts | `src/core/style-guide.ts` |
 | 6 Review UI | ✅ OpenCut Studio: drop zone, live preview, transcript editing, layers, renders | `src/studio/*` |
-| 7 Automation | ✅ headless CLI (`reels new … --auto --render`). ⏳ folder watcher, posting | `src/cli.ts` |
+| 7 Automation | ✅ hands-free autopilot: `auto-edit/` drop folder → AI director (Claude API with self-review, headless Claude Code/Codex over MCP, or basic) → final render → `outbox/` + notification + webhook; run at login (launchd); "ask the AI" revisions. ⏳ posting to platforms | `src/core/autopilot.ts`, `src/core/director/*`, `src/core/launchd.ts` |
 
 Deviations from the original plan, and why:
 - **One package (`apps/reels`) instead of three.** One `bun install` and one place to run things.
@@ -283,8 +283,8 @@ AI coding agent as a single task.
 
 ## 9. What's next
 
-1. **Face-tracking reframe** for wide footage: Apple's Vision framework through a small Swift helper, or MediaPipe, feeding `focusX` per clip.
-2. **Folder watcher**: a new file in the inbox runs `reels new … --auto --render` or a headless agent, then sends a notification.
+1. **Face-tracking reframe** for wide footage: Apple's Vision framework through a small Swift helper, or MediaPipe, feeding `focusX` per clip. (Today the AI sets `focusX` from the frames it sees.)
+2. **Learning from your tweaks**: when you change an AI edit in the Studio, offer to save the preference to `STYLE.md`.
 3. **Animated zooms** (slow push-ins) and transitions.
 4. **Better word timing** with whisper.cpp DTW timestamps (`-dtw`), and filler detection tuned on your own voice.
 5. **Posting**: YouTube Shorts and Instagram Reels APIs behind a manual approve step, optionally tracked on a content board.

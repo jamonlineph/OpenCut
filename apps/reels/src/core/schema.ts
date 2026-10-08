@@ -110,6 +110,8 @@ export const Project = z.object({
       targetLufs: z.number().default(-14),
     })
     .default({ music: null, normalize: true, targetLufs: -14 }),
+  /** What the creator says this reel is about: goal, audience, call to action. Read by the AI. */
+  brief: z.string().default(""),
   /** Free-form notes, e.g. the agent's publish copy or what it changed. */
   notes: z.string().default(""),
 });

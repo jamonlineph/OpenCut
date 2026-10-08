@@ -3,7 +3,8 @@ import { z } from "zod";
 import { round3, subtract, type Interval } from "./intervals";
 import { addAsset, findAsset, fullClips } from "./project";
 import { Captions, nextId, OverlayLayout, TextItem, TimeRef, type Clip, type Project } from "./schema";
-import { clipDuration, placeClips, totalDuration, type EditContext, type PWord } from "./timeline";
+import { findRetakes } from "./retakes";
+import { clipDuration, keptWords, placeClips, totalDuration, type EditContext, type PWord } from "./timeline";
 import type { Workspace } from "./workspace";
 
 const WordRange = z.object({
@@ -35,6 +36,9 @@ export const EditOp = z.discriminatedUnion("op", [
     })
     .describe("Jump-cut out every pause."),
   z.object({ op: z.literal("remove_fillers") }).describe("Cut um, uh, erm and similar."),
+  z
+    .object({ op: z.literal("remove_retakes") })
+    .describe("Cut false starts and repeated takes, keeping the last attempt of each sentence."),
   z
     .object({ op: z.literal("move_to_start"), ...WordRange.shape, duplicate: z.boolean().optional() })
     .describe("Use words from..to as the hook: move them to the very start (duplicate=true keeps them in place too)."),
@@ -111,6 +115,7 @@ export const EditOp = z.discriminatedUnion("op", [
     })
     .describe("Background music, lowered automatically under speech."),
   z.object({ op: z.literal("notes"), text: z.string() }).describe("Save notes on the project (e.g. title, caption, hashtags)."),
+  z.object({ op: z.literal("brief"), text: z.string() }).describe("Set the creator's context for this reel (topic, goal, audience, call to action)."),
   z.object({ op: z.literal("reset") }).describe("Start over with every video in full."),
 ]);
 export type EditOp = z.infer<typeof EditOp>;
@@ -323,6 +328,14 @@ export function applyEdits(ws: Workspace, input: Project, ops: EditOp[], ctx: Ed
         summary.push(`Removed ${ids.length} filler word(s).`);
         break;
       }
+      case "remove_retakes": {
+        const ranges = findRetakes(keptWords(ctx, placeClips(project)));
+        for (const [a, b] of ranges) {
+          for (const [from, to] of wordRange(ctx, a, b)) cutFromClips(project, from.asset, cutSpan(ctx, from, to, settings.cutPadding));
+        }
+        summary.push(ranges.length ? `Removed ${ranges.length} false start(s)/retake(s): ${ranges.map(([a, b]) => `#${a}-#${b}`).join(", ")}.` : "No retakes found.");
+        break;
+      }
       case "move_to_start": {
         const groups = wordRange(ctx, op.from, op.to);
         if (!op.duplicate) for (const [from, to] of groups) cutFromClips(project, from.asset, cutSpan(ctx, from, to, settings.cutPadding));
@@ -448,6 +461,11 @@ export function applyEdits(ws: Workspace, input: Project, ops: EditOp[], ctx: Ed
         if (asset.kind !== "audio") throw new Error(`${asset.name} is not an audio file.`);
         project.audio.music = { asset: asset.id, volumeDb: op.volumeDb ?? project.audio.music?.volumeDb ?? -20, duck: op.duck ?? true };
         summary.push(`Music: ${asset.name}.`);
+        break;
+      }
+      case "brief": {
+        project.brief = op.text;
+        summary.push("Saved brief.");
         break;
       }
       case "notes": {

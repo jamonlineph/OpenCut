@@ -204,6 +204,18 @@ a { color: var(--accent-2); }
   background: var(--panel-2); border: 1px solid var(--accent); border-radius: 999px; padding: 8px 18px; box-shadow: 0 8px 30px rgba(0,0,0,.4);
 }
 .toast.err { border-color: var(--danger); }
+.autopilot-toggle { display: flex; gap: 8px; align-items: flex-start; padding: 8px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
+.autopilot-toggle input { margin-top: 3px; accent-color: var(--accent); }
+.jobs { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.job { padding: 8px; border-radius: 8px; background: var(--panel-2); }
+.job .hint { margin-top: 2px; }
+.job-link { padding: 2px 4px; font-size: 12px; color: var(--accent-2); white-space: normal; text-align: left; }
+.chip { border-radius: 999px; padding: 4px 10px; font-size: 12px; }
+.ai-status { margin-top: 6px; padding: 10px; border-radius: 8px; background: var(--panel-2); font-size: 13px; white-space: pre-wrap; }
+.ai-status.running { border-left: 3px solid var(--warn); }
+.ai-status.done { border-left: 3px solid var(--ok); }
+.ai-status.error { border-left: 3px solid var(--danger); }
+textarea { width: 100%; resize: vertical; }
 .home { padding: 40px; max-width: 760px; }
 .home h2 { margin-top: 0; }
 .checks div { padding: 3px 0; }

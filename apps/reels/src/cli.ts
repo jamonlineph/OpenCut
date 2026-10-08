@@ -1,7 +1,10 @@
 #!/usr/bin/env bun
-import { resolve } from "node:path";
+import { basename, extname, resolve } from "node:path";
 
+import { Autopilot, listJobs, loadEnvFile, retryJob, runJob } from "./core/autopilot";
 import { doctor } from "./core/capabilities";
+import { directorLabel, pickDirector, reviseProject } from "./core/director";
+import { installLaunchAgent, uninstallLaunchAgent } from "./core/launchd";
 import { which } from "./core/exec";
 import { analyzeProject, createProject, editContext, listProjects, loadProject } from "./core/project";
 import { renderProject } from "./core/render/render";
@@ -19,12 +22,14 @@ const option = (name: string) => {
 };
 
 const ws = workspace();
+loadEnvFile(ws);
 
 async function printDoctor() {
   console.log(`Workspace: ${ws.root}\n`);
   for (const c of await doctor(ws)) {
     console.log(`${c.ok ? "✓" : "✗"} ${c.name}: ${c.detail}${c.fix ? `\n    fix: ${c.fix}` : ""}`);
   }
+  console.log(`✓ AI director: ${directorLabel(pickDirector(ws))}${pickDirector(ws) === "basic" ? "\n    for AI edits: install Claude Code (claude.ai/code) or add ANTHROPIC_API_KEY to " + resolve(ws.root, ".env") : ""}`);
 }
 
 function mcpConfig() {
@@ -58,6 +63,15 @@ const HELP = `OpenCut Reels
   bun run doctor                      check FFmpeg, whisper.cpp and the model
   bun run studio                      open the editor in your browser
   bun run mcp                         start the MCP server (your AI client runs this)
+
+  Hands-free (drop a video, get a finished reel in the outbox):
+  bun run reels autopilot             watch ${ws.autoEdit}
+  bun run reels auto-edit FILE...     edit these files now, like dropping them
+  bun run reels jobs                  recent autopilot jobs
+  bun run reels retry JOB             run a failed job again
+  bun run reels ask PROJECT "make the hook punchier"
+  bun run reels install-agent         start OpenCut at login (macOS), so drops work any time
+  bun run reels uninstall-agent
 
   bun run reels mcp-config            print setup snippets for Claude / Codex / Antigravity
   bun run reels inbox                 list dropped files
@@ -130,6 +144,62 @@ async function main() {
       console.log(formatTranscript(p, editContext(ws, p), { detail: flags.has("--words") ? "words" : "phrases" }));
       break;
     }
+    case "autopilot": {
+      const pilot = new Autopilot(ws, { log: (l) => console.log(l) });
+      if (!pilot.start()) throw new Error("Another OpenCut process (probably the Studio) is already watching the auto-edit folder.");
+      console.log(`Autopilot (${directorLabel(pickDirector(ws))}) is watching ${ws.autoEdit}\nFinished reels go to ${ws.outbox}. Ctrl+C to stop.`);
+      let last = "";
+      setInterval(() => {
+        const job = listJobs(ws, 1)[0];
+        const line = job ? `[${job.status}] ${job.name}: ${job.step}` : "";
+        if (line && line !== last) console.log((last = line));
+      }, 1000);
+      await new Promise(() => {});
+      break;
+    }
+    case "auto-edit": {
+      if (!args.length) throw new Error("Usage: bun run reels auto-edit FILE... (a video, plus optional photos and a notes.txt)");
+      const paths = args.map((a) => resolve(a));
+      const video = paths.find((p) => /\.(mp4|mov|m4v|mkv|webm|avi)$/i.test(p));
+      const name = option("--name") ?? (video ? basename(video, extname(video)) : "reel");
+      let last = "";
+      const job = await runJob(ws, { name, paths }, {
+        onChange: (j) => {
+          const line = `[${j.status}] ${j.step}`;
+          if (line !== last) console.log((last = line));
+        },
+      });
+      console.log(`\n${job.summary ?? ""}`);
+      for (const o of job.outputs) console.log(`→ ${o.file}`);
+      break;
+    }
+    case "jobs":
+      for (const j of listJobs(ws)) {
+        console.log(`${j.id}  [${j.status}] ${j.name}${j.director ? ` (${j.director})` : ""}${j.error ? ` — ${j.error}` : ""}`);
+        for (const o of j.outputs) console.log(`    → ${o.file}`);
+      }
+      break;
+    case "retry": {
+      const job = await retryJob(ws, args[0]!, { onChange: (j) => console.log(`[${j.status}] ${j.step}`) });
+      for (const o of job.outputs) console.log(`→ ${o.file}`);
+      break;
+    }
+    case "ask": {
+      const [id, ...words] = args;
+      if (!id || !words.length) throw new Error('Usage: bun run reels ask PROJECT "what to change"');
+      const result = await reviseProject(ws, id, words.join(" "), { onStep: (s) => console.log(s), log: (l) => console.log(`  ${l}`) });
+      console.log(result.summary);
+      result.warnings.forEach((w) => console.warn(`warning: ${w}`));
+      break;
+    }
+    case "install-agent": {
+      const file = await installLaunchAgent(ws);
+      console.log(`OpenCut now starts at login (${file}).\nDrop videos into ${ws.autoEdit} any time. Studio: http://localhost:4317`);
+      break;
+    }
+    case "uninstall-agent":
+      console.log((await uninstallLaunchAgent()) ? "Removed. OpenCut no longer starts at login." : "OpenCut wasn't set to start at login.");
+      break;
     default:
       console.log(HELP);
   }

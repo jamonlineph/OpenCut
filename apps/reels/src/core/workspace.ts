@@ -33,8 +33,29 @@ export const Settings = z.object({
   /** Padding kept around speech at each cut (seconds). */
   cutPadding: z.number().default(0.08),
   captionStyle: z.enum(["bold", "clean", "minimal"]).default("bold"),
+  autopilot: z
+    .object({
+      /** Who decides the edit for dropped videos. "auto" picks the best one available. */
+      director: z.enum(["auto", "claude-code", "claude-api", "codex", "basic"]).default("auto"),
+      /** Claude model for the claude-api director. */
+      model: z.string().default("claude-opus-5-5"),
+      /** Most reels to cut from one long video. */
+      maxReels: z.number().int().min(1).max(10).default(3),
+      /** Let the AI watch its preview render and fix problems before the final render. */
+      review: z.boolean().default(true),
+      /** macOS notification when a reel is ready. */
+      notify: z.boolean().default(true),
+      /** POST a JSON summary here when a reel is ready (Make, Zapier, n8n, Monday.com…). */
+      webhookUrl: z.string().default(""),
+      /** Override the headless agent command. "{prompt}" and "{mcpConfig}" are filled in. */
+      agentCommand: z.array(z.string()).default([]),
+      /** Minutes before a headless agent run is stopped. */
+      agentTimeoutMinutes: z.number().min(1).default(40),
+    })
+    .prefault({}),
 });
 export type Settings = z.infer<typeof Settings>;
+export type AutopilotSettings = Settings["autopilot"];
 
 export type Workspace = {
   root: string;
@@ -46,6 +67,12 @@ export type Workspace = {
   music: string;
   settingsFile: string;
   styleGuide: string;
+  /** Drop folder: anything put here is edited automatically. */
+  autoEdit: string;
+  /** Finished reels and their publish copy. */
+  outbox: string;
+  /** Autopilot job records and runtime files. */
+  autopilot: string;
 };
 
 export function defaultRoot(): string {
@@ -68,11 +95,20 @@ export function workspace(root = defaultRoot()): Workspace {
     music: join(root, "brand", "music"),
     settingsFile: join(root, "settings.json"),
     styleGuide: join(root, "STYLE.md"),
+    autoEdit: join(root, "auto-edit"),
+    outbox: join(root, "outbox"),
+    autopilot: join(root, ".autopilot"),
   };
-  for (const dir of [ws.inbox, ws.projects, ws.cache, ws.models, ws.fonts, ws.music]) {
+  for (const dir of [ws.inbox, ws.projects, ws.cache, ws.models, ws.fonts, ws.music, ws.autoEdit, ws.outbox, ws.autopilot]) {
     mkdirSync(dir, { recursive: true });
   }
-  if (!existsSync(ws.settingsFile)) writeJson(ws.settingsFile, Settings.parse({}));
+  // Write missing options into settings.json so they're visible and editable,
+  // but never overwrite a file the user broke while editing.
+  const raw = readJson<unknown>(ws.settingsFile);
+  const parsed = Settings.safeParse(raw ?? {});
+  if (!existsSync(ws.settingsFile) || (parsed.success && JSON.stringify(parsed.data) !== JSON.stringify(raw))) {
+    if (parsed.success) writeJson(ws.settingsFile, parsed.data);
+  }
   if (!existsSync(ws.styleGuide)) writeFileSync(ws.styleGuide, DEFAULT_STYLE_GUIDE);
   cached = ws;
   return ws;
@@ -86,8 +122,9 @@ export function readSettings(ws: Workspace): Settings {
   }
 }
 
-export function writeSettings(ws: Workspace, patch: Partial<Settings>): Settings {
-  const next = Settings.parse({ ...readSettings(ws), ...patch });
+export function writeSettings(ws: Workspace, patch: Partial<Omit<Settings, "autopilot">> & { autopilot?: Partial<AutopilotSettings> }): Settings {
+  const current = readSettings(ws);
+  const next = Settings.parse({ ...current, ...patch, autopilot: { ...current.autopilot, ...patch.autopilot } });
   writeJson(ws.settingsFile, next);
   return next;
 }

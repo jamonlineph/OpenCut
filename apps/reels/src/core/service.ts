@@ -96,6 +96,7 @@ export async function editProject(ws: Workspace, id: string, ops: EditOp[]) {
 
 /** The standard first pass for a talking-head reel. */
 export const AUTO_EDIT: EditOp[] = [
+  { op: "remove_retakes" },
   { op: "remove_silences" },
   { op: "remove_fillers" },
   { op: "auto_zoom", zoom: 1.12 },
@@ -159,6 +160,7 @@ export function describeProject(ws: Workspace, id: string): string {
   const c = project.captions;
   lines.push("", `Captions: ${c.enabled ? `on, style ${c.style}, ${c.maxWords} words, ${c.position}` : "off"}`);
   if (project.audio.music) lines.push(`Music: ${project.audio.music.asset} at ${project.audio.music.volumeDb}dB${project.audio.music.duck ? ", ducked" : ""}`);
+  if (project.brief) lines.push("", `Brief from the creator: ${project.brief}`);
   if (project.notes) lines.push("", `Notes: ${project.notes}`);
 
   const r = state.render;

@@ -10,6 +10,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
 import { readAnalysis } from "../core/analysis";
+import { listJobs } from "../core/autopilot";
 import { EditOp } from "../core/ops";
 import { editContext, findAsset, isAnalyzed, listProjects, loadProject, projectDir, readState, revertProject, resolveMediaPath } from "../core/project";
 import { contactSheet, grabFrames } from "../core/render/frames";
@@ -28,7 +29,7 @@ Workflow:
 1. get_style_guide — the user's editing rules. Follow them.
 2. list_inbox → create_project with the video(s). Analysis (transcription, silence detection) runs automatically; poll get_project(wait_seconds) until it is done.
 3. get_transcript — numbered words (#id). Decide the story: hook, best takes, ending. Cut false starts and repeated takes.
-4. edit with a list of ops. Cuts use word ids, so you never compute timestamps. Typical first pass: ${AUTO_EDIT.map((o) => o.op).join(", ")}.
+4. edit with a list of ops. Cuts use word ids, so you never compute timestamps. Typical first pass: ${AUTO_EDIT.map((o) => o.op).join(", ")}. Read the creator's brief in get_project; record what you learn about the reel's purpose with the brief op.
 5. view_media to look at footage and dropped images before placing overlays or changing framing.
 6. render (quality "preview" first), then view_render to check captions, overlays and framing. Fix and re-render. Finish with quality "final".
 Edits are versioned; revert undoes. The user can watch and tweak the same project live in OpenCut Studio at ${STUDIO_URL}.`;
@@ -320,6 +321,30 @@ server.registerTool(
           { type: "text", text: `${latest.file}${note}: frames at ${sheet.times.join(", ")}s.` },
         ],
       };
+    }),
+);
+
+server.registerTool(
+  "list_autopilot_jobs",
+  {
+    title: "List autopilot jobs",
+    description: `Recent hands-free jobs: videos dropped into ${ws.autoEdit} that were edited automatically, with their status, reels and output files.`,
+    annotations: { readOnlyHint: true },
+  },
+  () =>
+    guard(() => {
+      const jobs = listJobs(ws, 15);
+      if (!jobs.length) return text(`No autopilot jobs yet. Videos dropped into ${ws.autoEdit} are edited automatically while OpenCut Studio runs.`);
+      return text(
+        jobs
+          .map((j) =>
+            [
+              `${j.createdAt.slice(0, 16).replace("T", " ")} "${j.name}" [${j.status}] ${j.director ?? ""}${j.error ? ` — ${j.error}` : ""}`,
+              ...j.outputs.map((o) => `   project ${o.project}: "${o.title}" ${o.duration.toFixed(1)}s → ${o.file}`),
+            ].join("\n"),
+          )
+          .join("\n"),
+      );
     }),
 );
 
