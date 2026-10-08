@@ -29,18 +29,30 @@ const fmt = (t: number) => {
 };
 const fmtSize = (b: number) => (b > 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(b / 1e6))} MB`);
 
-function useHashRoute(): [string | null, (id: string | null) => void] {
-  const read = () => window.location.hash.match(/^#\/p\/(.+)$/)?.[1] ?? null;
-  const [route, setRoute] = useState(read);
+function useHash(pattern: RegExp): string | null {
+  const read = () => {
+    const m = window.location.hash.match(pattern)?.[1];
+    return m ? decodeURIComponent(m) : null;
+  };
+  const [value, setValue] = useState(read);
   useEffect(() => {
-    const on = () => setRoute(read());
+    const on = () => setValue(read());
     window.addEventListener("hashchange", on);
     return () => window.removeEventListener("hashchange", on);
   }, []);
-  return [route, (id) => (window.location.hash = id ? `#/p/${id}` : "#/")];
+  return value;
 }
 
+/** #/p/<project> opens a reel; #/review/<job> opens a job waiting for your OK. */
+function useHashRoute(): [string | null, (id: string | null) => void] {
+  return [useHash(/^#\/p\/(.+)$/), (id) => (window.location.hash = id ? `#/p/${encodeURIComponent(id)}` : "#/")];
+}
+const useReviewRoute = () => useHash(/^#\/review\/(.+)$/);
+const goReview = (jobId: string) => (window.location.hash = `#/review/${encodeURIComponent(jobId)}`);
+
 type Upload = { name: string; progress: number };
+
+type JobView = Omit<Job, "previews"> & { previews: (NonNullable<Job["previews"]>[number] & { url: string })[] };
 
 type AutopilotInfo = {
   enabled: boolean;
@@ -50,7 +62,18 @@ type AutopilotInfo = {
   directorLabel: string;
   folder: string;
   outbox: string;
-  jobs: Job[];
+  jobs: JobView[];
+};
+
+type SettingsInfo = {
+  approve: boolean;
+  notify: boolean;
+  language: string;
+  languages: [string, string][];
+  captionStyle: "bold" | "clean" | "minimal";
+  whisperModel: string;
+  multilingual: boolean;
+  models: { name: string; file: string; size: string; note: string; installed: boolean }[];
 };
 
 const readPref = (key: string, fallback: boolean) => {
@@ -85,6 +108,7 @@ function uploadFile(file: File, onProgress: (p: number) => void, batch?: string)
 function App() {
   const [state, setState] = useState<StudioState | null>(null);
   const [route, go] = useHashRoute();
+  const review = useReviewRoute();
   const [uploads, setUploads] = useState<Upload[]>([]);
   const [dragging, setDragging] = useState(false);
   const [toast, setToast] = useState<{ text: string; err?: boolean } | null>(null);
@@ -185,10 +209,12 @@ function App() {
         setAutoEdit={setAutoEdit}
       />
       <main className="main">
-        {route ? (
+        {review ? (
+          <ReviewScreen key={review} id={review} go={go} notify={notify} refresh={refresh} director={autopilot?.director ?? "basic"} />
+        ) : route ? (
           <ProjectScreen key={route} id={route} state={state} notify={notify} onDeleted={() => (go(null), refresh())} />
         ) : (
-          <Home state={state} notify={notify} />
+          <Home state={state} notify={notify} waiting={autopilot?.jobs.filter((j) => j.status === "review") ?? []} />
         )}
       </main>
       {dragging && (
@@ -343,9 +369,29 @@ const JOB_LABEL: Record<Job["status"], string> = {
   analyzing: "transcribing",
   editing: "editing",
   rendering: "rendering",
+  review: "needs your OK",
   done: "ready",
   error: "failed",
+  discarded: "discarded",
 };
+const jobPill = (status: Job["status"]) => (status === "done" ? "ok" : status === "error" ? "err" : status === "discarded" ? "" : "warn");
+
+function useSettings(notify: (t: string, err?: boolean) => void) {
+  const [settings, setSettings] = useState<SettingsInfo | null>(null);
+  useEffect(() => {
+    api<SettingsInfo>("/api/settings").then(setSettings).catch(() => {});
+  }, []);
+  const update = useCallback(
+    (patch: Partial<Pick<SettingsInfo, "approve" | "notify" | "language" | "captionStyle">>) => {
+      setSettings((s) => (s ? { ...s, ...patch } : s));
+      api<SettingsInfo>("/api/settings", { method: "POST", body: patch })
+        .then(setSettings)
+        .catch((e) => notify((e as Error).message, true));
+    },
+    [notify],
+  );
+  return [settings, update] as const;
+}
 
 function AutopilotPanel(props: {
   info: AutopilotInfo | null;
@@ -386,14 +432,22 @@ function AutopilotPanel(props: {
           )}
         </span>
       </label>
+      <ApproveToggle notify={notify} />
       <div className="jobs">
         {info.jobs.slice(0, 6).map((j) => (
           <div key={j.id} className={`job ${j.status}`}>
             <div className="row" style={{ justifyContent: "space-between", flexWrap: "nowrap" }}>
               <span className="media-name">{j.name}</span>
-              <span className={`pill ${j.status === "done" ? "ok" : j.status === "error" ? "err" : "warn"}`}>{JOB_LABEL[j.status]}</span>
+              <span className={`pill ${jobPill(j.status)}`}>{JOB_LABEL[j.status]}</span>
             </div>
-            {j.status !== "done" && j.status !== "error" && <div className="hint">{j.step}</div>}
+            {!["done", "error", "review", "discarded"].includes(j.status) && <div className="hint">{j.step}</div>}
+            {j.status === "review" && (
+              <div className="row">
+                <button className="primary job-review" onClick={() => goReview(j.id)}>
+                  Review {j.previews.length > 1 ? `${j.previews.length} reels` : "reel"} ▶
+                </button>
+              </div>
+            )}
             {j.status === "error" && (
               <div className="hint">
                 {j.error}{" "}
@@ -422,6 +476,189 @@ function AutopilotPanel(props: {
         ))}
       </div>
     </>
+  );
+}
+
+function ApproveToggle({ notify }: { notify: (t: string, err?: boolean) => void }) {
+  const [settings, update] = useSettings(notify);
+  if (!settings) return null;
+  return (
+    <label className="autopilot-toggle" style={{ marginTop: 6 }}>
+      <input type="checkbox" checked={settings.approve} onChange={(e) => update({ approve: e.target.checked })} />
+      <span>
+        Ask me before exporting
+        <div className="hint">{settings.approve ? "You get a preview to approve, change or discard." : "Finished reels go straight to the outbox."}</div>
+      </span>
+    </label>
+  );
+}
+
+// ───────────────────────── review
+
+function ReviewScreen({ id, go, notify, refresh, director }: { id: string; go: (id: string | null) => void; notify: (t: string, err?: boolean) => void; refresh: () => void; director: string }) {
+  const [job, setJob] = useState<JobView | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const load = useCallback(
+    () =>
+      api<JobView>(`/api/autopilot/jobs/${encodeURIComponent(id)}`)
+        .then((j) => (setJob(j), setError(null)))
+        .catch((e) => setError((e as Error).message)),
+    [id],
+  );
+  useEffect(() => {
+    load();
+    const t = window.setInterval(load, 2000);
+    return () => window.clearInterval(t);
+  }, [load]);
+
+  const act = async (path: string, body: unknown, done: string) => {
+    try {
+      setJob(await api<JobView>(`/api/autopilot/jobs/${encodeURIComponent(id)}/${path}`, { method: "POST", body }));
+      notify(done);
+      refresh();
+    } catch (e) {
+      notify((e as Error).message, true);
+    }
+  };
+
+  if (error && !job) return <div className="home">Couldn't open this job: {error}</div>;
+  if (!job) return <div className="home hint">Loading…</div>;
+  const working = ["importing", "analyzing", "editing", "rendering"].includes(job.status);
+
+  return (
+    <div className="home review">
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <h2 style={{ margin: 0 }}>{job.name}</h2>
+        <span className={`pill ${jobPill(job.status)}`}>{JOB_LABEL[job.status]}</span>
+      </div>
+      {job.director && <p className="hint">Edited by {job.director}{job.summary ? ` · ${job.summary.split("\n")[0]}` : ""}</p>}
+
+      {working && (
+        <div className="card">
+          <div className="row">
+            <span className="spinner" /> {job.step}
+          </div>
+        </div>
+      )}
+      {job.status === "error" && (
+        <div className="card">
+          <b>Something went wrong.</b> <span className="hint">{job.error}</span>
+        </div>
+      )}
+      {job.status === "discarded" && <div className="card hint">Discarded. The reels are still in your Studio if you change your mind.</div>}
+      {job.status === "done" && (
+        <div className="card">
+          <h3>Exported ✓</h3>
+          {job.outputs.map((o) => (
+            <div key={o.project} className="row">
+              <span className="media-name">{o.title}</span>
+              <button className="ghost" onClick={() => api("/api/reveal", { method: "POST", body: { path: o.file } }).catch((e) => notify(e.message, true))}>
+                Show in Finder
+              </button>
+              <button className="ghost" onClick={() => go(o.project)}>
+                Open
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {job.status === "review" && (
+        <>
+          {job.error && <div className="card hint">Last change didn't work: {job.error}</div>}
+          <div className="row" style={{ margin: "4px 0 18px" }}>
+            <button className="primary" onClick={() => act("approve", {}, "Exporting… you'll find it in the outbox")}>
+              ✓ Approve & export{job.previews.length > 1 ? ` all ${job.previews.length}` : ""}
+            </button>
+            <button className="ghost" onClick={() => confirm("Discard this job? The reels stay in your Studio.") && act("discard", {}, "Discarded")}>
+              Discard
+            </button>
+          </div>
+          {job.previews.map((p) => (
+            <ReviewReel
+              key={p.project}
+              preview={p}
+              canAsk={director !== "basic"}
+              onOpen={() => go(p.project)}
+              onApproveOne={job.previews.length > 1 ? () => act("approve", { projects: [p.project] }, `Exporting “${p.title}”…`) : undefined}
+              onRevise={(note) => act("revise", { project: p.project, note }, "Making your changes…")}
+              onRefresh={() => act("refresh", {}, "Updating the preview…")}
+            />
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
+
+function ReviewReel(props: {
+  preview: JobView["previews"][number];
+  canAsk: boolean;
+  onOpen: () => void;
+  onApproveOne?: () => void;
+  onRevise: (note: string) => void;
+  onRefresh: () => void;
+}) {
+  const { preview: p, canAsk, onOpen, onApproveOne, onRevise, onRefresh } = props;
+  const [note, setNote] = useState("");
+  const [view, setView] = useState<ProjectView | null>(null);
+  useEffect(() => {
+    api<ProjectView>(`/api/projects/${p.project}`).then(setView).catch(() => {});
+  }, [p.project, p.revision]);
+  const cut = view?.words.filter((w) => !w.kept).length ?? 0;
+  const edited = view && view.project.revision !== p.revision;
+  return (
+    <div className="card review-reel">
+      <video src={p.url} controls playsInline preload="metadata" />
+      <div className="review-info">
+        <h3>{p.title}</h3>
+        <div className="hint">
+          {fmt(p.duration)}
+          {view ? ` · ${view.clips.length} cuts · ${cut} word${cut === 1 ? "" : "s"} cut` : ""}
+        </div>
+        {p.caption && <p className="review-caption">{p.caption}</p>}
+        {p.hashtags.length > 0 && <p className="hint">{p.hashtags.join(" ")}</p>}
+        {view && (
+          <details>
+            <summary className="hint" style={{ cursor: "pointer" }}>
+              Transcript (cut words struck out)
+            </summary>
+            <p className="review-transcript">
+              {view.words.map((w) => (
+                <span key={w.id} className={w.kept ? "" : "cut"}>
+                  {w.text}{" "}
+                </span>
+              ))}
+            </p>
+          </details>
+        )}
+        {edited && (
+          <div className="row hint">
+            You changed this reel since the preview.
+            <button className="ghost" onClick={onRefresh}>
+              Update preview
+            </button>
+          </div>
+        )}
+        <div className="row" style={{ marginTop: 10 }}>
+          {onApproveOne && <button onClick={onApproveOne}>Export just this one</button>}
+          <button className="ghost" onClick={onOpen}>
+            Fix it myself ✎
+          </button>
+        </div>
+        <textarea
+          rows={2}
+          placeholder={canAsk ? "What should change? e.g. “start with the joke”, “cut the part about pricing”" : "Asking for changes needs an AI (Claude Code or an API key). You can still fix it yourself."}
+          disabled={!canAsk}
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          style={{ marginTop: 10 }}
+        />
+        <button disabled={!canAsk || !note.trim()} onClick={() => (onRevise(note), setNote(""))} style={{ marginTop: 6 }}>
+          Redo with this note
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -534,13 +771,67 @@ function ConnectCard({ notify }: { notify: (t: string, err?: boolean) => void })
   );
 }
 
-function Home({ state, notify }: { state: StudioState | null; notify: (t: string, err?: boolean) => void }) {
+function SettingsCard({ notify }: { notify: (t: string, err?: boolean) => void }) {
+  const [settings, update] = useSettings(notify);
+  if (!settings) return null;
+  const needsMultilingual = settings.language !== "en" && !settings.multilingual;
+  return (
+    <div className="card">
+      <h3>Settings</h3>
+      <div className="settings-grid">
+        <label htmlFor="set-language">Language you speak</label>
+        <div>
+          <select id="set-language" value={settings.language} onChange={(e) => update({ language: e.target.value })}>
+            {settings.languages.map(([code, label]) => (
+              <option key={code} value={code}>
+                {label}
+              </option>
+            ))}
+          </select>
+          {settings.language === "tl" && <div className="hint">For Taglish, Whisper writes Tagalog and English as you say them. If it translates English parts, try “English”.</div>}
+          {needsMultilingual && <div className="hint" style={{ color: "var(--warn)" }}>Your speech model ({settings.whisperModel}) only knows English. Run setup with the default model to use other languages.</div>}
+        </div>
+        <label htmlFor="set-captions">Caption style for new reels</label>
+        <select id="set-captions" value={settings.captionStyle} onChange={(e) => update({ captionStyle: e.target.value as SettingsInfo["captionStyle"] })}>
+          <option value="bold">Bold (word by word)</option>
+          <option value="clean">Clean</option>
+          <option value="minimal">Minimal</option>
+        </select>
+        <span>Before exporting</span>
+        <label className="row">
+          <input type="checkbox" checked={settings.approve} onChange={(e) => update({ approve: e.target.checked })} /> Ask me first (preview to approve)
+        </label>
+        <span>Notifications</span>
+        <label className="row">
+          <input type="checkbox" checked={settings.notify} onChange={(e) => update({ notify: e.target.checked })} /> When a reel is ready or needs my OK
+        </label>
+      </div>
+    </div>
+  );
+}
+
+function Home({ state, notify, waiting }: { state: StudioState | null; notify: (t: string, err?: boolean) => void; waiting: JobView[] }) {
   const [checks, setChecks] = useState<{ name: string; ok: boolean; detail: string; fix?: string }[] | null>(null);
   useEffect(() => {
     api<typeof checks>("/api/doctor").then(setChecks).catch(() => {});
   }, []);
   return (
     <div className="home">
+      {waiting.length > 0 && (
+        <div className="card setup">
+          <h3>Waiting for your OK</h3>
+          {waiting.map((j) => (
+            <div key={j.id} className="row" style={{ justifyContent: "space-between", padding: "4px 0" }}>
+              <span>
+                <b>{j.name}</b> <span className="hint">{j.previews.map((p) => p.title).join(" · ")}</span>
+              </span>
+              <button className="primary" onClick={() => goReview(j.id)}>
+                Review ▶
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       <SetupCard notify={notify} />
       <h2>Make a reel</h2>
       <h3>Hands-free</h3>
@@ -564,6 +855,7 @@ function Home({ state, notify }: { state: StudioState | null; notify: (t: string
         Your editing rules and “about me” for the AI live in <code>{state?.root}/STYLE.md</code>.
       </p>
       <ConnectCard notify={notify} />
+      <SettingsCard notify={notify} />
       <details className="checks">
         <summary>System check</summary>
         {!checks && <div className="hint">Checking…</div>}

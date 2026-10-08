@@ -35,9 +35,10 @@ final class WebController: NSObject, WKUIDelegate, WKNavigationDelegate, WKDownl
         webView.load(URLRequest(url: Engine.baseURL))
     }
 
-    func openProject(_ id: String) {
-        let safe = id.replacingOccurrences(of: "'", with: "")
-        webView.evaluateJavaScript("location.hash = '#/p/\(safe)'", completionHandler: nil)
+    /// Shows a Studio screen: "p/<project>" or "review/<job>".
+    func open(route: String) {
+        let safe = route.filter { $0.isLetter || $0.isNumber || "-_./".contains($0) }
+        webView.evaluateJavaScript("location.hash = '#/\(safe)'", completionHandler: nil)
     }
 
     func reload() {

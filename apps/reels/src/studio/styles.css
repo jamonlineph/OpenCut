@@ -226,6 +226,22 @@ details.checks summary { cursor: pointer; color: var(--muted); margin: 8px 0; }
 .home h2 { margin-top: 0; }
 .checks div { padding: 3px 0; }
 .home code { background: var(--panel-2); padding: 2px 6px; border-radius: 5px; }
+.review { max-width: 980px; }
+.review-reel { display: grid; grid-template-columns: 270px 1fr; gap: 20px; align-items: start; }
+.review-reel video { width: 270px; aspect-ratio: 9 / 16; border-radius: 10px; background: #000; }
+.review-info h3 { margin: 0 0 4px; }
+.review-caption { white-space: pre-wrap; margin: 10px 0 4px; }
+.review-transcript { line-height: 1.8; font-size: 14px; }
+.review-transcript .cut { color: var(--muted); text-decoration: line-through; opacity: 0.6; }
+.settings-grid { display: grid; grid-template-columns: 190px 1fr; gap: 12px 16px; align-items: center; }
+.settings-grid select { max-width: 280px; }
+.spinner { width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; display: inline-block; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.job-review { padding: 3px 10px; font-size: 12px; margin-top: 4px; }
+@media (max-width: 760px) {
+  .review-reel, .settings-grid { grid-template-columns: 1fr; }
+  .review-reel video { width: 100%; max-width: 320px; }
+}
 .render-list video { width: 100%; border-radius: 8px; background: #000; max-height: 360px; }
 
 @media (max-width: 1100px) {

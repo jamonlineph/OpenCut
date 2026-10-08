@@ -43,6 +43,8 @@ export const Settings = z.object({
       maxReels: z.number().int().min(1).max(10).default(3),
       /** Let the AI watch its preview render and fix problems before the final render. */
       review: z.boolean().default(true),
+      /** Wait for your OK in the Studio (with a quick preview) before exporting to the outbox. */
+      approve: z.boolean().default(true),
       /** macOS notification when a reel is ready. */
       notify: z.boolean().default(true),
       /** POST a JSON summary here when a reel is ready (Make, Zapier, n8n, Monday.com…). */

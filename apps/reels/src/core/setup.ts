@@ -13,6 +13,30 @@ export const MODELS = {
 
 export type ModelName = keyof typeof MODELS;
 
+/** Spoken languages offered in the Studio ("tl" also covers Taglish). */
+export const LANGUAGES: [code: string, label: string][] = [
+  ["auto", "Detect automatically"],
+  ["en", "English"],
+  ["tl", "Tagalog / Taglish"],
+  ["es", "Spanish"],
+  ["pt", "Portuguese"],
+  ["fr", "French"],
+  ["de", "German"],
+  ["it", "Italian"],
+  ["nl", "Dutch"],
+  ["id", "Indonesian"],
+  ["ms", "Malay"],
+  ["vi", "Vietnamese"],
+  ["th", "Thai"],
+  ["hi", "Hindi"],
+  ["ar", "Arabic"],
+  ["tr", "Turkish"],
+  ["ru", "Russian"],
+  ["ja", "Japanese"],
+  ["ko", "Korean"],
+  ["zh", "Chinese"],
+];
+
 const BASE_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
 
 export async function downloadModel(

@@ -10,7 +10,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
 import { readAnalysis } from "../core/analysis";
-import { listJobs } from "../core/autopilot";
+import { approveJob, discardJob, listJobs } from "../core/autopilot";
 import { EditOp } from "../core/ops";
 import { editContext, findAsset, isAnalyzed, listProjects, loadProject, projectDir, readState, revertProject, resolveMediaPath } from "../core/project";
 import { contactSheet, grabFrames } from "../core/render/frames";
@@ -341,11 +341,47 @@ server.registerTool(
             [
               `${j.createdAt.slice(0, 16).replace("T", " ")} "${j.name}" [${j.status}] ${j.director ?? ""}${j.error ? ` — ${j.error}` : ""}`,
               ...j.outputs.map((o) => `   project ${o.project}: "${o.title}" ${o.duration.toFixed(1)}s → ${o.file}`),
+              ...(j.status === "review"
+                ? [
+                    `   job id ${j.id}: waiting for the user's OK (the Studio shows a preview)`,
+                    ...(j.previews ?? []).map((p) => `   project ${p.project}: "${p.title}" ${p.duration.toFixed(1)}s, preview ${join(ws.root, p.file)}`),
+                  ]
+                : []),
             ].join("\n"),
           )
           .join("\n"),
       );
     }),
+);
+
+server.registerTool(
+  "approve_autopilot_job",
+  {
+    title: "Approve and export an autopilot job",
+    description:
+      "Exports the reels of a job that is waiting for the user's OK (status review) to the outbox. Only call this when the user says the reel is good to go. To change a reel first, edit its project with edit_project; approving exports the edited version.",
+    inputSchema: {
+      job: z.string().describe("Job id from list_autopilot_jobs"),
+      projects: z.array(z.string()).optional().describe("Export only these reels of the job (project ids)"),
+    },
+  },
+  ({ job, projects }) =>
+    guard(() => {
+      const started = approveJob(ws, job, { projects });
+      started.catch(() => {}); // Failures are recorded on the job.
+      return text(`Exporting. The finished file${projects?.length === 1 ? "" : "s"} will be in ${ws.outbox}; check list_autopilot_jobs for progress.`);
+    }),
+);
+
+server.registerTool(
+  "discard_autopilot_job",
+  {
+    title: "Discard an autopilot job",
+    description: "Drops a job that is waiting for review without exporting it. Its reels stay in the Studio. Only when the user asks.",
+    inputSchema: { job: z.string().describe("Job id from list_autopilot_jobs") },
+    annotations: { destructiveHint: false },
+  },
+  ({ job }) => guard(() => text(discardJob(ws, job).step)),
 );
 
 server.registerResource(

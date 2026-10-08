@@ -1,7 +1,7 @@
 import { constants, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, extname, join, relative } from "node:path";
 
-import { directorLabel, directProject, pickDirector } from "./director";
+import { directorLabel, directProject, pickDirector, reviseProject } from "./director";
 import { parsePublish } from "./director/plan";
 import { run, which } from "./exec";
 import { listRenders, renderProject } from "./render/render";
@@ -13,10 +13,15 @@ import { mediaKindOf, readJson, readSettings, slugify, writeJson, type Workspace
 // Drop a video (or a folder with videos, photos and a notes.txt) into
 // <workspace>/auto-edit and it is imported, edited by the AI director,
 // rendered, and delivered to <workspace>/outbox with its publish copy.
+// With "approve" on, it first waits in the Studio with a quick preview until
+// you approve it, ask for changes, or discard it.
 
-export type JobStatus = "importing" | "analyzing" | "editing" | "rendering" | "done" | "error";
+export type JobStatus = "importing" | "analyzing" | "editing" | "rendering" | "review" | "done" | "error" | "discarded";
 
 export type JobOutput = { project: string; file: string; title: string; caption: string; hashtags: string[]; duration: number };
+
+/** A reel waiting for your OK: its quick preview render and publish copy. */
+export type JobPreview = { project: string; file: string; title: string; caption: string; hashtags: string[]; duration: number; revision: number };
 
 export type Job = {
   id: string;
@@ -30,6 +35,7 @@ export type Job = {
   notes: string;
   director?: string;
   projects: string[];
+  previews?: JobPreview[];
   outputs: JobOutput[];
   summary?: string;
   error?: string;
@@ -218,7 +224,7 @@ export class Autopilot {
         const group = this.queue.shift()!;
         await runJob(this.ws, group, {
           onChange: (job) => {
-            this.current = job.status === "done" || job.status === "error" ? null : job.id;
+            this.current = ["done", "error", "review", "discarded"].includes(job.status) ? null : job.id;
             this.options.onChange?.();
           },
         }).catch(() => {}); // Failures are recorded on the job.
@@ -239,8 +245,37 @@ function pidAlive(pid: number) {
   }
 }
 
-/** Imports, edits, renders and delivers one drop. Works for paths inside or outside the drop folder. */
-export async function runJob(ws: Workspace, group: DropGroup, hooks: { onChange?: (job: Job) => void } = {}): Promise<Job> {
+type JobHooks = { onChange?: (job: Job) => void };
+
+/** Saves a job record (and tells the caller) every time it changes. */
+function tracker(ws: Workspace, job: Job, hooks: JobHooks) {
+  const save = (patch: Partial<Job> = {}) => {
+    Object.assign(job, patch, { updatedAt: new Date().toISOString() });
+    job.log = job.log.slice(-300);
+    writeJson(jobFile(ws, job.id), job);
+    hooks.onChange?.(job);
+  };
+  const log = (line: string) => {
+    job.log.push(`${new Date().toISOString().slice(11, 19)} ${line}`);
+    save();
+  };
+  return { save, log };
+}
+
+/** Records a failure on the job and tells you about it. */
+async function failed(ws: Workspace, job: Job, save: (patch: Partial<Job>) => void, error: unknown): Promise<never> {
+  const message = error instanceof Error ? error.message : String(error);
+  save({ status: "error", step: "Failed", error: message });
+  if (readSettings(ws).autopilot.notify) await notify("OpenCut couldn't finish a reel", `${job.name}: ${message.slice(0, 150)}`);
+  throw error;
+}
+
+/**
+ * Imports, edits, renders and delivers one drop. Works for paths inside or
+ * outside the drop folder. With `approve` (default: the setting), it stops at
+ * "review" with a preview of each reel instead of exporting.
+ */
+export async function runJob(ws: Workspace, group: DropGroup, hooks: JobHooks & { approve?: boolean } = {}): Promise<Job> {
   mkdirSync(jobsDir(ws), { recursive: true });
   const stamp = new Date().toISOString();
   const job: Job = {
@@ -256,16 +291,7 @@ export async function runJob(ws: Workspace, group: DropGroup, hooks: { onChange?
     outputs: [],
     log: [],
   };
-  const save = (patch: Partial<Job> = {}) => {
-    Object.assign(job, patch, { updatedAt: new Date().toISOString() });
-    job.log = job.log.slice(-300);
-    writeJson(jobFile(ws, job.id), job);
-    hooks.onChange?.(job);
-  };
-  const log = (line: string) => {
-    job.log.push(`${new Date().toISOString().slice(11, 19)} ${line}`);
-    save();
-  };
+  const { save, log } = tracker(ws, job, hooks);
   save();
 
   try {
@@ -307,9 +333,56 @@ export async function runJob(ws: Workspace, group: DropGroup, hooks: { onChange?
     job.projects = result.projects;
     job.summary = result.summary;
     log(`Edited ${result.projects.length} reel(s) with ${directorLabel(result.director)}.`);
+  } catch (error) {
+    return failed(ws, job, save, error);
+  }
 
-    // 4. Render the final version of every reel that doesn't have one yet.
+  // 4. Wait for your OK, or export straight away.
+  if (hooks.approve ?? readSettings(ws).autopilot.approve) {
+    await toReview(ws, job, save);
+    return job;
+  }
+  return exportJob(ws, job, save);
+}
+
+/** Renders a quick preview of every reel and waits for your OK. */
+async function toReview(ws: Workspace, job: Job, save: (patch?: Partial<Job>) => void) {
+  try {
+    save({ status: "rendering", step: "Rendering previews…" });
+    const previews: JobPreview[] = [];
+    for (const [i, id] of job.projects.entries()) {
+      const p = loadProject(ws, id);
+      save({ step: `Rendering preview ${i + 1} of ${job.projects.length}…` });
+      const rel = `renders/r${p.revision}-preview.mp4`;
+      const existing = listRenders(ws, id).find((r) => r.file === rel);
+      const output = existing?.path ?? (await renderProject(ws, id, "preview")).output;
+      const publish = parsePublish(p.notes);
+      previews.push({
+        project: id,
+        file: relative(ws.root, output),
+        title: publish.title || p.name,
+        caption: publish.caption,
+        hashtags: publish.hashtags,
+        duration: totalDuration(p),
+        revision: p.revision,
+      });
+    }
+    save({ status: "review", step: "Waiting for your OK", previews, error: undefined });
+  } catch (error) {
+    return failed(ws, job, save, error);
+  }
+  const settings = readSettings(ws).autopilot;
+  if (settings.notify) {
+    const titles = (job.previews ?? []).map((p) => p.title).join(", ");
+    await notify(`Ready for your OK: ${job.previews?.length === 1 ? "1 reel" : `${job.previews?.length} reels`}`, titles.slice(0, 180));
+  }
+}
+
+/** Renders the final version of every reel and delivers it to the outbox. */
+async function exportJob(ws: Workspace, job: Job, save: (patch?: Partial<Job>) => void): Promise<Job> {
+  try {
     save({ status: "rendering" });
+    job.outputs = [];
     for (const [i, id] of job.projects.entries()) {
       const p = loadProject(ws, id);
       const done = listRenders(ws, id).find((r) => r.file === `renders/r${p.revision}-final.mp4`);
@@ -317,16 +390,71 @@ export async function runJob(ws: Workspace, group: DropGroup, hooks: { onChange?
       const output = done?.path ?? (await renderProject(ws, id, "final")).output;
       job.outputs.push(deliver(ws, id, output));
     }
-
     save({ status: "done", step: `${job.outputs.length} reel(s) ready in outbox` });
-    await afterDone(ws, job);
-    return job;
   } catch (error) {
+    return failed(ws, job, save, error);
+  }
+  await afterDone(ws, job);
+  return job;
+}
+
+function reviewable(ws: Workspace, jobId: string): Job {
+  const job = readJson<Job>(jobFile(ws, jobId));
+  if (!job) throw new Error(`Job ${jobId} not found.`);
+  if (job.status !== "review") throw new Error(`"${job.name}" isn't waiting for review (it is ${job.status}).`);
+  return job;
+}
+
+/**
+ * Exports a reviewed job. Reels you edited in the Studio meanwhile are exported
+ * as they are now. `projects` limits the export to some of the job's reels.
+ */
+export function approveJob(ws: Workspace, jobId: string, options: JobHooks & { projects?: string[] } = {}): Promise<Job> {
+  const job = reviewable(ws, jobId);
+  if (options.projects?.length) job.projects = job.projects.filter((p) => options.projects!.includes(p));
+  if (!job.projects.length) throw new Error("Pick at least one reel to export.");
+  const { save, log } = tracker(ws, job, options);
+  log("Approved.");
+  return exportJob(ws, job, save);
+}
+
+/** Asks the AI director to change one reel of a job in review, then previews it again. */
+export async function reviseJob(ws: Workspace, jobId: string, projectId: string, note: string, hooks: JobHooks = {}): Promise<Job> {
+  const job = reviewable(ws, jobId);
+  if (!job.projects.includes(projectId)) throw new Error("That reel isn't part of this job.");
+  if (!note.trim()) throw new Error("Say what should change.");
+  const { save, log } = tracker(ws, job, hooks);
+  log(`Asked for changes: ${note.trim()}`);
+  save({ status: "editing", step: "Making your changes…" });
+  try {
+    const result = await reviseProject(ws, projectId, note.trim(), { onStep: (step) => save({ step }), log });
+    log(result.summary);
+  } catch (error) {
+    // The reel is unchanged: show the error and go back to waiting for review.
     const message = error instanceof Error ? error.message : String(error);
-    save({ status: "error", step: "Failed", error: message });
-    if (readSettings(ws).autopilot.notify) await notify("OpenCut couldn't finish a reel", `${job.name}: ${message.slice(0, 150)}`);
+    log(`Changes failed: ${message}`);
+    save({ status: "review", step: "Waiting for your OK", error: message });
     throw error;
   }
+  await toReview(ws, job, save);
+  return job;
+}
+
+/** Re-previews a job in review after you edited its reels in the Studio. */
+export async function refreshReview(ws: Workspace, jobId: string, hooks: JobHooks = {}): Promise<Job> {
+  const job = reviewable(ws, jobId);
+  const { save } = tracker(ws, job, hooks);
+  await toReview(ws, job, save);
+  return job;
+}
+
+/** Drops a job in review without exporting (its reels stay in the Studio). */
+export function discardJob(ws: Workspace, jobId: string): Job {
+  const job = reviewable(ws, jobId);
+  const { save, log } = tracker(ws, job, {});
+  log("Discarded.");
+  save({ status: "discarded", step: "Discarded (the reels are still in the Studio)" });
+  return job;
 }
 
 function moveOrCopy(from: string, to: string) {

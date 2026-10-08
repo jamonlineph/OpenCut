@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { basename, extname, join, resolve, sep } from "node:path";
 
 import { analyzeMedia, readAnalysis } from "../core/analysis";
-import { Autopilot, listJobs, loadEnvFile, retryJob } from "../core/autopilot";
+import { approveJob, Autopilot, discardJob, listJobs, loadEnvFile, refreshReview, retryJob, reviseJob, type Job } from "../core/autopilot";
 import { directorLabel, pickDirector, reviseProject } from "../core/director";
 import { doctor } from "../core/capabilities";
 import { clientsAvailable, connectClient, mcpSetupText, type AiClient } from "../core/connect";
@@ -14,9 +14,9 @@ import { captionChunks } from "../core/render/captions";
 import { isRendering, listRenders, renderProject } from "../core/render/render";
 import { AUTO_EDIT, editProject, ensureAnalyzed, listInbox, startProject } from "../core/service";
 import { frameSnap, keptWords, placeClips, resolveTime, totalDuration } from "../core/timeline";
-import { downloadModel, MODELS, type ModelName } from "../core/setup";
+import { downloadModel, LANGUAGES, MODELS, type ModelName } from "../core/setup";
 import { whisperBin } from "../core/transcribe";
-import { mediaKindOf, readSettings, workspace } from "../core/workspace";
+import { mediaKindOf, readJson, readSettings, workspace, writeSettings, type Settings } from "../core/workspace";
 import index from "./index.html";
 
 const ws = workspace();
@@ -85,6 +85,32 @@ function serveFile(req: Request, abs: string) {
       "Content-Type": file.type,
     },
   });
+}
+
+/** A job as the Studio shows it: previews get playable URLs. */
+const jobView = (j: Job) => ({ ...j, previews: (j.previews ?? []).map((p) => ({ ...p, url: mediaUrl(p.file) })) });
+const loadJob = (id: string) => {
+  const job = readJson<Job>(join(ws.autopilot, "jobs", `${basename(id)}.json`));
+  if (!job) throw new Error("Job not found.");
+  return job;
+};
+/** Approve/revise run in the background; their errors are recorded on the job. */
+const background = (work: Promise<unknown>) => void work.catch((e) => console.error(`[autopilot] ${e instanceof Error ? e.message : e}`));
+
+/** The settings the Studio lets you change. */
+function settingsView() {
+  const s = readSettings(ws);
+  const multilingual = !/\.en\.bin$/.test(s.whisperModel);
+  return {
+    approve: s.autopilot.approve,
+    notify: s.autopilot.notify,
+    language: s.language,
+    languages: LANGUAGES,
+    captionStyle: s.captionStyle,
+    whisperModel: s.whisperModel,
+    multilingual,
+    models: Object.entries(MODELS).map(([name, m]) => ({ name, ...m, installed: existsSync(join(ws.models, m.file)) })),
+  };
 }
 
 const mediaUrl = (rel: string) => `/media/${rel.split("/").map(encodeURIComponent).join("/")}`;
@@ -237,7 +263,7 @@ const server = Bun.serve({
             directorLabel: directorLabel(director),
             folder: ws.autoEdit,
             outbox: ws.outbox,
-            jobs: listJobs(ws, 15).map((j) => ({ ...j, log: j.log.slice(-6) })),
+            jobs: listJobs(ws, 15).map((j) => jobView({ ...j, log: j.log.slice(-6) })),
           };
         }),
     },
@@ -247,6 +273,58 @@ const server = Bun.serve({
           const { id } = (await req.json()) as { id: string };
           retryJob(ws, id).catch(() => {});
           await Bun.sleep(300);
+        }),
+    },
+    "/api/autopilot/jobs/:id": {
+      GET: (req) => handle(() => jobView(loadJob(req.params.id))),
+    },
+    "/api/autopilot/jobs/:id/approve": {
+      POST: (req) =>
+        handle(async () => {
+          const { projects } = (await req.json().catch(() => ({}))) as { projects?: string[] };
+          loadJob(req.params.id);
+          background(approveJob(ws, req.params.id, { projects }));
+          await Bun.sleep(150);
+          return jobView(loadJob(req.params.id));
+        }),
+    },
+    "/api/autopilot/jobs/:id/revise": {
+      POST: (req) =>
+        handle(async () => {
+          const { project, note } = (await req.json()) as { project: string; note: string };
+          if (pickDirector(ws) === "basic") throw new Error("Asking for changes needs an AI: install Claude Code or add an API key. You can still open the reel and edit it yourself.");
+          background(reviseJob(ws, req.params.id, project, note ?? ""));
+          await Bun.sleep(150);
+          return jobView(loadJob(req.params.id));
+        }),
+    },
+    "/api/autopilot/jobs/:id/refresh": {
+      // After you edited a reel by hand: render its preview again.
+      POST: (req) =>
+        handle(async () => {
+          background(refreshReview(ws, req.params.id));
+          await Bun.sleep(150);
+          return jobView(loadJob(req.params.id));
+        }),
+    },
+    "/api/autopilot/jobs/:id/discard": {
+      POST: (req) => handle(() => jobView(discardJob(ws, req.params.id))),
+    },
+    "/api/settings": {
+      GET: () => handle(settingsView),
+      POST: (req) =>
+        handle(async () => {
+          const body = (await req.json()) as { approve?: boolean; notify?: boolean; language?: string; captionStyle?: Settings["captionStyle"] };
+          if (body.language !== undefined && !LANGUAGES.some(([code]) => code === body.language)) throw new Error(`Unknown language: ${body.language}`);
+          writeSettings(ws, {
+            ...(body.language !== undefined && { language: body.language }),
+            ...(body.captionStyle !== undefined && { captionStyle: body.captionStyle }),
+            autopilot: {
+              ...(body.approve !== undefined && { approve: Boolean(body.approve) }),
+              ...(body.notify !== undefined && { notify: Boolean(body.notify) }),
+            },
+          });
+          return settingsView();
         }),
     },
     "/api/upload/commit": {

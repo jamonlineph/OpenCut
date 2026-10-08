@@ -82,9 +82,13 @@ async function basicEdit(ws: Workspace, projectId: string): Promise<string> {
   const firstSentence: string[] = [];
   for (const w of words) {
     firstSentence.push(w.text);
-    if (/[.?!]$/.test(w.text) || firstSentence.length >= 10) break;
+    if (/[.?!]$/.test(w.text) || firstSentence.length >= 14) break;
   }
-  const title = firstSentence.join(" ").replace(/[.,!?]+$/, "");
+  // A sentence that runs on is cut back to its last comma, never mid-phrase.
+  const ended = /[.?!]$/.test(firstSentence.at(-1) ?? "");
+  const comma = firstSentence.findLastIndex((w, i) => i >= 2 && w.endsWith(","));
+  const kept = ended || comma < 0 ? firstSentence : firstSentence.slice(0, comma + 1);
+  const title = kept.join(" ").replace(/[.,!?]+$/, "") + (ended || comma >= 0 ? "" : "…");
   if (title) await editProject(ws, projectId, [{ op: "notes", text: `Title: ${title}` }]);
   return summary.at(-1) ?? "Edited.";
 }

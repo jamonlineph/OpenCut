@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
-import { basename, extname, resolve } from "node:path";
+import { basename, extname, join, resolve } from "node:path";
 
-import { Autopilot, listJobs, loadEnvFile, retryJob, runJob } from "./core/autopilot";
+import { approveJob, Autopilot, discardJob, listJobs, loadEnvFile, retryJob, reviseJob, runJob } from "./core/autopilot";
 import { doctor } from "./core/capabilities";
 import { directorLabel, pickDirector, reviseProject } from "./core/director";
 import { mcpSetupText } from "./core/connect";
@@ -45,8 +45,13 @@ const HELP = `OpenCut Reels
 
   Hands-free (drop a video, get a finished reel in the outbox):
   bun run reels autopilot             watch ${ws.autoEdit}
-  bun run reels auto-edit FILE...     edit these files now, like dropping them
+  bun run reels auto-edit FILE... [--review]
+                                      edit these files now, like dropping them
+                                      (--review: wait for your OK instead of exporting)
   bun run reels jobs                  recent autopilot jobs
+  bun run reels approve JOB           export a job that is waiting for your OK
+  bun run reels revise JOB PROJECT "what to change"
+  bun run reels discard JOB           drop a job waiting for review (reels stay in the Studio)
   bun run reels retry JOB             run a failed job again
   bun run reels ask PROJECT "make the hook punchier"
   bun run reels install-agent         start OpenCut at login (macOS), so drops work any time
@@ -143,6 +148,7 @@ async function main() {
       const name = option("--name") ?? (video ? basename(video, extname(video)) : "reel");
       let last = "";
       const job = await runJob(ws, { name, paths }, {
+        approve: flags.has("--review"),
         onChange: (j) => {
           const line = `[${j.status}] ${j.step}`;
           if (line !== last) console.log((last = line));
@@ -150,12 +156,30 @@ async function main() {
       });
       console.log(`\n${job.summary ?? ""}`);
       for (const o of job.outputs) console.log(`→ ${o.file}`);
+      for (const p of job.previews ?? []) if (job.status === "review") console.log(`preview: ${join(ws.root, p.file)}`);
+      if (job.status === "review") console.log(`\nWaiting for your OK: bun run reels approve ${job.id}`);
       break;
     }
+    case "approve": {
+      const job = await approveJob(ws, args[0] ?? "", { onChange: (j) => console.log(`[${j.status}] ${j.step}`) });
+      for (const o of job.outputs) console.log(`→ ${o.file}`);
+      break;
+    }
+    case "revise": {
+      const [jobId, projectId, ...words] = args;
+      if (!jobId || !projectId || !words.length) throw new Error('Usage: bun run reels revise JOB PROJECT "what to change"');
+      const job = await reviseJob(ws, jobId, projectId, words.join(" "), { onChange: (j) => console.log(`[${j.status}] ${j.step}`) });
+      for (const p of job.previews ?? []) console.log(`preview: ${join(ws.root, p.file)}`);
+      break;
+    }
+    case "discard":
+      console.log(discardJob(ws, args[0] ?? "").step);
+      break;
     case "jobs":
       for (const j of listJobs(ws)) {
         console.log(`${j.id}  [${j.status}] ${j.name}${j.director ? ` (${j.director})` : ""}${j.error ? ` — ${j.error}` : ""}`);
         for (const o of j.outputs) console.log(`    → ${o.file}`);
+        if (j.status === "review") for (const p of j.previews ?? []) console.log(`    preview (${p.project}): ${join(ws.root, p.file)}`);
       }
       break;
     case "retry": {

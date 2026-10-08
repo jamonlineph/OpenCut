@@ -224,7 +224,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     private func autoEdit(_ urls: [URL]) {
         do {
             let name = try Drops.sendToAutoEdit(urls, dropFolder: engine.dropFolder)
-            notify(title: "Auto-editing \(name)", body: "You'll get a notification when the reel is ready.", project: nil)
+            notify(title: "Auto-editing \(name)", body: "You'll get a notification when the reel is ready.", route: nil)
         } catch {
             showError(error.localizedDescription)
         }
@@ -256,8 +256,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
                 self.statusLine.title = "Editing \(name): \(step)"
                 self.statusItem.button?.image = self.symbol("scissors.circle.fill") ?? self.symbol("scissors")
             } else {
-                self.statusLine.title = "\(director) auto-edits your drops"
-                self.statusItem.button?.image = self.symbol("scissors")
+                let waiting = jobs.filter { ($0["status"] as? String) == "review" }.count
+                if waiting > 0 {
+                    self.statusLine.title = waiting == 1 ? "1 reel needs your OK" : "\(waiting) reels need your OK"
+                    self.statusItem.button?.image = self.symbol("scissors.badge.ellipsis") ?? self.symbol("scissors")
+                } else {
+                    self.statusLine.title = "\(director) auto-edits your drops"
+                    self.statusItem.button?.image = self.symbol("scissors")
+                }
             }
 
             for job in jobs {
@@ -270,21 +276,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
                     let outputs = job["outputs"] as? [[String: Any]] ?? []
                     let titles = outputs.compactMap { $0["title"] as? String }
                     let title = outputs.count == 1 ? "Your reel is ready" : "\(outputs.count) reels are ready"
-                    self.notify(title: title, body: titles.isEmpty ? name : titles.joined(separator: " · "), project: outputs.first?["project"] as? String)
+                    self.notify(title: title, body: titles.isEmpty ? name : titles.joined(separator: " · "), route: (outputs.first?["project"] as? String).map { "p/\($0)" })
+                } else if status == "review" {
+                    let previews = job["previews"] as? [[String: Any]] ?? []
+                    let titles = previews.compactMap { $0["title"] as? String }
+                    let title = previews.count > 1 ? "\(previews.count) reels need your OK" : "Your reel needs your OK"
+                    self.notify(title: title, body: titles.isEmpty ? name : titles.joined(separator: " · "), route: "review/\(id)")
                 } else if status == "error" {
-                    self.notify(title: "Couldn't finish \(name)", body: job["error"] as? String ?? "Open OpenCut for details.", project: nil)
+                    self.notify(title: "Couldn't finish \(name)", body: job["error"] as? String ?? "Open OpenCut for details.", route: nil)
                 }
             }
             self.firstPoll = false
         }
     }
 
-    private func notify(title: String, body: String, project: String?) {
+    private func notify(title: String, body: String, route: String?) {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
         content.sound = .default
-        if let project { content.userInfo = ["project": project] }
+        if let route { content.userInfo = ["route": route] }
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
     }
@@ -294,13 +305,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         completionHandler([.banner, .sound])
     }
 
-    /// Clicking "Your reel is ready" opens that reel.
+    /// Clicking a notification opens that reel, or the review screen for a reel waiting for your OK.
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
-        let project = response.notification.request.content.userInfo["project"] as? String
+        let route = response.notification.request.content.userInfo["route"] as? String
         DispatchQueue.main.async {
             self.showWindow()
-            if let project { self.web.openProject(project) }
+            if let route { self.web.open(route: route) }
             completionHandler()
         }
     }
