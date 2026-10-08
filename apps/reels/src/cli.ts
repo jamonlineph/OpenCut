@@ -6,6 +6,7 @@ import { doctor } from "./core/capabilities";
 import { directorLabel, pickDirector, reviseProject } from "./core/director";
 import { mcpSetupText } from "./core/connect";
 import { installLaunchAgent, uninstallLaunchAgent } from "./core/launchd";
+import { compiled } from "./core/runtime";
 import { analyzeProject, createProject, editContext, listProjects, loadProject } from "./core/project";
 import { renderProject } from "./core/render/render";
 import { autoEdit, describeProject, listInbox } from "./core/service";
@@ -157,7 +158,7 @@ async function main() {
       console.log(`\n${job.summary ?? ""}`);
       for (const o of job.outputs) console.log(`→ ${o.file}`);
       for (const p of job.previews ?? []) if (job.status === "review") console.log(`preview: ${join(ws.root, p.file)}`);
-      if (job.status === "review") console.log(`\nWaiting for your OK: bun run reels approve ${job.id}`);
+      if (job.status === "review") console.log(`\nWaiting for your OK: ${compiled ? process.execPath : "bun run reels"} approve ${job.id}`);
       break;
     }
     case "approve": {

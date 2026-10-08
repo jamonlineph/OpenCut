@@ -381,7 +381,7 @@ async function toReview(ws: Workspace, job: Job, save: (patch?: Partial<Job>) =>
 /** Renders the final version of every reel and delivers it to the outbox. */
 async function exportJob(ws: Workspace, job: Job, save: (patch?: Partial<Job>) => void): Promise<Job> {
   try {
-    save({ status: "rendering" });
+    save({ status: "rendering", step: "Rendering…" });
     job.outputs = [];
     for (const [i, id] of job.projects.entries()) {
       const p = loadProject(ws, id);

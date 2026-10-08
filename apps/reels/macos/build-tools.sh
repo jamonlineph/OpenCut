@@ -14,7 +14,7 @@ set -euo pipefail
 
 FFMPEG_VERSION="9.0.2"
 WHISPER_VERSION="v1.9.5"
-MACOS_MIN="13.0"
+MACOS_MIN="13.3" # whisper.cpp uses Accelerate (BLAS) calls added in macOS 13.3
 
 cd "$(dirname "$0")/.."
 OUT="$PWD/.tools"

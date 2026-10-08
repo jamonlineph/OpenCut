@@ -48,7 +48,7 @@ echo "→ Building the engine (Studio, autopilot, MCP server, CLI)"
 bun build --compile src/main.ts --outfile "$APP/Contents/MacOS/opencut-engine"
 
 echo "→ Building the app"
-swiftc -O -swift-version 5 -target "$ARCH-apple-macos13.0" \
+swiftc -O -swift-version 5 -target "$ARCH-apple-macos13.3" \
   -o "$APP/Contents/MacOS/OpenCut" macos/OpenCut/*.swift
 
 echo "→ Icon and Info.plist"
