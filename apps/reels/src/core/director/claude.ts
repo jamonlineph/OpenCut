@@ -20,7 +20,8 @@ const text = (t: string): Anthropic.Beta.BetaTextBlockParam => ({ type: "text", 
 export class ClaudeDirectorError extends Error {}
 
 async function ask<S extends z.ZodType>(client: Anthropic, model: string, schema: S, content: Content): Promise<z.infer<S>> {
-  const response = await client.beta.messages.parse({
+  // Streamed: long transcripts plus thinking can run for minutes.
+  const stream = client.beta.messages.stream({
     model,
     // Thinking counts toward this, and a long video can yield several reels.
     max_tokens: 32000,
@@ -32,6 +33,7 @@ async function ask<S extends z.ZodType>(client: Anthropic, model: string, schema
     system: SYSTEM_PROMPT,
     messages: [{ role: "user", content }],
   });
+  const response = await stream.finalMessage();
   if (response.stop_reason === "refusal") {
     throw new ClaudeDirectorError(`Claude declined to edit this video${response.stop_details?.explanation ? `: ${response.stop_details.explanation}` : "."}`);
   }

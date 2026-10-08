@@ -112,8 +112,11 @@ jobs:
         run: |
           bun src/cli.ts auto-edit talk.mp4
           PROJECT="$(bun src/cli.ts list | head -1 | cut -d' ' -f1)"
-          bun src/cli.ts transcript "$PROJECT"
+          bun src/cli.ts transcript "$PROJECT" | tee transcript.txt
+          bun src/cli.ts transcript "$PROJECT" --words
           bun src/cli.ts show "$PROJECT"
+          # Spoken words should survive silence removal (only um/uh and the false start get cut).
+          if grep -qE "~~(Hey|videos\.|word\.)~~" transcript.txt; then echo "::warning::real words were marked as cut: check word timing"; fi
           ls -la "$OPENCUT_WORKSPACE/outbox"
           OUT="$(ls "$OPENCUT_WORKSPACE"/outbox/*.mp4 | head -1)"
           ffprobe -v error -show_entries stream=codec_name,width,height -show_entries format=duration -of compact "$OUT"

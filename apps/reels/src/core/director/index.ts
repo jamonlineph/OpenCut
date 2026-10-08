@@ -9,7 +9,6 @@ import { contactSheet } from "../render/frames";
 import { renderProject } from "../render/render";
 import { probe } from "../probe";
 import { AUTO_EDIT, editProject, listInbox } from "../service";
-import { keptWords, placeClips } from "../timeline";
 import { readSettings, type Workspace } from "../workspace";
 import { agentAvailable, directPrompt, revisePrompt, runAgent, type AgentKind } from "./agent";
 import { planWithClaude, reviewWithClaude, reviseWithClaude } from "./claude";
@@ -78,13 +77,15 @@ async function basicEdit(ws: Workspace, projectId: string): Promise<string> {
   const { summary } = await editProject(ws, projectId, AUTO_EDIT);
   const project = loadProject(ws, projectId);
   const ctx = editContext(ws, project);
-  const words = keptWords(ctx, placeClips(project)).filter((w) => !w.filler);
+  // Title from the first full sentence spoken (kept or not), without fillers.
+  const words = ctx.words.filter((w) => !w.filler);
   const firstSentence: string[] = [];
   for (const w of words) {
     firstSentence.push(w.text);
     if (/[.?!]$/.test(w.text) || firstSentence.length >= 10) break;
   }
-  if (firstSentence.length) await editProject(ws, projectId, [{ op: "notes", text: `Title: ${firstSentence.join(" ").replace(/[.,]$/, "")}` }]);
+  const title = firstSentence.join(" ").replace(/[.,!?]+$/, "");
+  if (title) await editProject(ws, projectId, [{ op: "notes", text: `Title: ${title}` }]);
   return summary.at(-1) ?? "Edited.";
 }
 

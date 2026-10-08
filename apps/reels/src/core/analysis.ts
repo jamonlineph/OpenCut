@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { ffmpegBin, runOrThrow, which } from "./exec";
 import { probe, type MediaInfo } from "./probe";
 import { detectSilences, type SilenceAnalysis } from "./silence";
-import { extractSpeechAudio, snapWordsToSpeech, transcribe, type Transcript } from "./transcribe";
+import { extractSpeechAudio, alignWordsToSpeech, transcribe, type Transcript } from "./transcribe";
 import { mediaKindOf, readJson, readSettings, writeJson, type Workspace } from "./workspace";
 
 export type AnalysisStage = "queued" | "probing" | "audio" | "silences" | "transcribing" | "done" | "error";
@@ -149,7 +149,7 @@ async function doAnalyze(ws: Workspace, relFile: string, onStatus?: (s: Analysis
         language: settings.language,
         onProgress: (f) => setStatus("transcribing", 0.15 + f * 0.84),
       });
-      transcript.words = snapWordsToSpeech(transcript.words, silence.silences);
+      transcript.words = alignWordsToSpeech(transcript.words, silence.silences);
       writeJson(join(dir, "transcript.json"), transcript);
       rmSync(wav, { force: true });
     }

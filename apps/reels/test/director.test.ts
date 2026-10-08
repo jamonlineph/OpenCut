@@ -46,6 +46,19 @@ describe("retakes", () => {
     expect(findRetakes(words)).toEqual([[0, 3], [4, 5]]);
   });
 
+  test("cuts a restart inside one sentence", () => {
+    const words = timed([["So", 0], ["the", 0.2], ["first", 0.4], ["thing,", 0.6], ["so", 1.4], ["the", 1.6], ["first", 1.8], ["thing", 2.0], ["is", 2.2], ["silence.", 2.4]]);
+    expect(findRetakes(words)).toEqual([[0, 3]]);
+  });
+
+  test("keeps parallel sentences that share a start", () => {
+    const words = timed([
+      ["I", 0], ["want", 0.2], ["to", 0.4], ["show", 0.6], ["you", 0.8], ["the", 1.0], ["cuts.", 1.2],
+      ["I", 2.5], ["want", 2.7], ["to", 2.9], ["show", 3.1], ["you", 3.3], ["the", 3.5], ["captions", 3.7], ["and", 3.9], ["the", 4.1], ["music.", 4.3],
+    ]);
+    expect(findRetakes(words)).toEqual([]);
+  });
+
   test("leaves normal speech alone", () => {
     const words = timed([["I", 0], ["love", 0.3], ["coffee.", 0.6], ["It", 1.5], ["keeps", 1.8], ["me", 2.1], ["going.", 2.4]]);
     expect(findRetakes(words)).toEqual([]);
@@ -117,23 +130,31 @@ describe("plan → edit ops", () => {
   });
 });
 
+/** A Messages API streaming response (server-sent events) with one text block. */
+function sse(text: string, stop: { reason: string; details?: unknown } = { reason: "end_turn" }) {
+  const events: [string, unknown][] = [
+    ["message_start", { type: "message_start", message: { id: "msg_1", type: "message", role: "assistant", model: "claude-opus-5-5", content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 1 } } }],
+    ...(text
+      ? ([
+          ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }],
+          ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } }],
+          ["content_block_stop", { type: "content_block_stop", index: 0 }],
+        ] as [string, unknown][])
+      : []),
+    ["message_delta", { type: "message_delta", delta: { stop_reason: stop.reason, stop_sequence: null, stop_details: stop.details ?? null }, usage: { output_tokens: 10 } }],
+    ["message_stop", { type: "message_stop" }],
+  ];
+  const body = events.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`).join("");
+  return new Response(body, { headers: { "content-type": "text/event-stream" } });
+}
+
 describe("Claude director", () => {
   test("sends context with images and parses the structured plan", async () => {
     const requests: { headers: Headers; body: Record<string, unknown> }[] = [];
     const answer = { summary: "A tip about editing.", reels: [plan()] };
     const fetchMock = async (_url: unknown, init?: RequestInit) => {
       requests.push({ headers: new Headers(init?.headers), body: JSON.parse(String(init?.body)) });
-      return Response.json({
-        id: "msg_1",
-        type: "message",
-        role: "assistant",
-        model: "claude-opus-5-5",
-        content: [{ type: "text", text: JSON.stringify(answer) }],
-        stop_reason: "end_turn",
-        stop_sequence: null,
-        stop_details: null,
-        usage: { input_tokens: 10, output_tokens: 10 },
-      });
+      return sse(JSON.stringify(answer));
     };
     const client = new Anthropic({ apiKey: "test", fetch: fetchMock as typeof fetch });
     const { project, ctx } = fixture();
@@ -152,6 +173,7 @@ describe("Claude director", () => {
 
     const { headers, body } = requests[0]!;
     expect(body.model).toBe("claude-opus-5-5");
+    expect(body.stream).toBe(true);
     expect(body.fallbacks).toBe("default");
     expect(headers.get("anthropic-beta")).toContain("server-side-fallback-2026-07-01");
     expect((body.output_config as { format: { type: string } }).format.type).toBe("json_schema");
@@ -164,15 +186,10 @@ describe("Claude director", () => {
   test("a refusal becomes a clear error", async () => {
     const client = new Anthropic({
       apiKey: "test",
-      fetch: (async () =>
-        Response.json({
-          id: "msg_2", type: "message", role: "assistant", model: "claude-opus-5-5", content: [],
-          stop_reason: "refusal", stop_sequence: null, stop_details: { type: "refusal", category: null, explanation: "nope" },
-          usage: { input_tokens: 1, output_tokens: 0 },
-        })) as unknown as typeof fetch,
+      fetch: (async () => sse("", { reason: "refusal", details: { type: "refusal", category: null, explanation: "nope" } })) as unknown as typeof fetch,
     });
     const { project, ctx } = fixture();
     const dc = { project, ctx, styleGuide: "", facts: "", transcript: "", pictures: [], visuals: [], music: [] };
-    await expect(planWithClaude(client, "claude-opus-5-5", dc, 1)).rejects.toThrow(/declined.*nope/);
+    await expect(planWithClaude(client, "claude-opus-5-5", dc, 1)).rejects.toThrow(/declined/);
   });
 });

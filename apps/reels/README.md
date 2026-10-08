@@ -26,9 +26,38 @@ a few frames and your photos.
 
 ---
 
-## Setup (Mac, one time)
+## Install the Mac app (recommended)
 
-You need [Homebrew](https://brew.sh). In Terminal:
+**OpenCut.app** is the easiest way to use all of this. It opens the Studio in its own window and keeps the
+autopilot running in the menu bar (✂), even with the window closed. Drop videos
+on its Dock icon to auto-edit them. When a reel is ready, you get a notification
+that opens it.
+
+**Option A: build it on your Mac (about 2 minutes, no security prompts).** In Terminal:
+
+```sh
+brew install ffmpeg whisper-cpp oven-sh/bun/bun   # tools (Homebrew: https://brew.sh)
+cd path/to/OpenCut/apps/reels
+bun run app                                        # builds, copies to /Applications, opens it
+```
+
+**Option B: download it.** Every push builds a disk image on GitHub: open the
+repository's **Actions** tab → **OpenCut Reels (macOS app)** → the latest run →
+**Artifacts** → `OpenCut-macOS-arm64` (Apple Silicon). Unzip, open `OpenCut.dmg`,
+and drag OpenCut to Applications. The build isn't notarized by Apple, so the first
+time macOS refuses to open it. Go to **System Settings → Privacy & Security** and
+click **Open Anyway**, or run `xattr -dr com.apple.quarantine /Applications/OpenCut.app`.
+
+On first launch the home screen walks you through the rest:
+
+1. **Install tools.** One click opens Terminal with `brew install ffmpeg whisper-cpp`.
+2. **Download the speech model** (about 550 MB) with a progress bar.
+3. **Connect your AI.** One-click buttons for Claude Code, Claude Desktop and Codex, plus copy-paste config for Antigravity.
+
+Turn on **Start at Login** in the ✂ menu so drops are edited any time. Updating
+works the same way: pull the latest code and run `bun run app` again.
+
+## Setup without the app (Terminal)
 
 ```sh
 brew install ffmpeg whisper-cpp oven-sh/bun/bun
@@ -41,6 +70,7 @@ bun run reels install-agent  # start OpenCut at login, so drops work any time
 
 `bun run setup` ends with a checklist. Every line should have a ✓, and the last line
 says which AI will edit your drops (see [Which AI edits](#which-ai-edits)).
+Don't use `install-agent` and the app's Start at Login together: pick one.
 
 > **Model choice.** The default `large-v3-turbo-q5_0` is accurate and fast on Apple
 > Silicon (M1 or newer), and handles English, Filipino/Tagalog, Spanish and most
@@ -48,9 +78,9 @@ says which AI will edit your drops (see [Which AI edits](#which-ai-edits)).
 
 ## Hands-free: drop a video, get a reel
 
-With OpenCut running (`install-agent` above, or `bun start`):
+With OpenCut running (the app, `install-agent`, or `bun start`):
 
-1. **Drop** a video into `~/Movies/OpenCut/auto-edit` in Finder, or onto the Studio window with **Auto-edit drops with AI** on.
+1. **Drop** a video onto the OpenCut Dock icon, into `~/Movies/OpenCut/auto-edit` in Finder, or onto the Studio window with **Auto-edit drops with AI** on.
    - **Add context** in the same drop: photos to show, a music track, and a `notes.txt` saying what the video is about, who it's for and your call to action.
    - **Several clips for one reel?** Put them in a folder and drop the folder. Clips play in name order, and photos and notes inside go with them.
 2. OpenCut transcribes the video, the AI decides the edit (and checks its own preview), and the final render is made.
@@ -219,6 +249,8 @@ inbox/ ──► analysis (cached per file) ──► project.json (timeline) �
 - `src/mcp`: the MCP server (stdio), 14 tools plus a style-guide resource and two prompts
 - `src/studio`: Bun server and React UI, with an instant preview that plays the edit without rendering
 - `src/cli.ts`: setup, doctor and headless commands
+- `src/main.ts`: entry point of the single-file engine in the Mac app (`opencut-engine studio | mcp | <cli command>`)
+- `macos/`: the native app. Swift/AppKit around a WKWebView: menu-bar status, Dock drops, notifications, Start at Login. `build.sh` compiles the engine and app, signs them ad-hoc and makes the DMG
 
 Development:
 

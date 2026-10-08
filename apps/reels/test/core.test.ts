@@ -10,7 +10,7 @@ import { buildCaptionEvents, captionChunks, toAss } from "../src/core/render/cap
 import { buildRenderPlan, cropRect, runsOf } from "../src/core/render/graph";
 import { keptWordIds, keptWords, placeClips, resolveTime, totalDuration } from "../src/core/timeline";
 import { formatTranscript } from "../src/core/transcript-view";
-import { parseWhisperJson, snapWordsToSpeech } from "../src/core/transcribe";
+import { alignWordsToSpeech, dtwPreset, parseWhisperJson } from "../src/core/transcribe";
 import { fixture, SETTINGS, testWorkspace } from "./fixtures";
 
 const ws = testWorkspace();
@@ -69,8 +69,46 @@ describe("whisper.cpp output", () => {
     ]);
   });
 
-  test("pulls word edges out of silences", () => {
-    const [w] = snapWordsToSpeech([{ text: "hi", start: 1, end: 3 }], [{ start: 2, end: 4 }]);
+  test("uses DTW timestamps for word starts when present", () => {
+    const tok = (text: string, from: number, to: number, dtw: number) => ({ text, offsets: { from, to }, t_dtw: dtw });
+    const parsed = parseWhisperJson({
+      transcription: [
+        { offsets: { from: 0, to: 3000 }, text: " Hi there.", tokens: [tok(" Hi", 0, 900, 52), tok(" there", 900, 2400, 95), tok(".", 2400, 2400, 140)] },
+      ],
+    });
+    expect(parsed.words.map((w) => [w.text, w.start])).toEqual([["Hi", 0.52], ["there.", 0.95]]);
+    // A word runs toward the next one, capped by its length so pauses aren't swallowed.
+    expect(parsed.words[0]!.end).toBeGreaterThan(0.52);
+    expect(parsed.words[0]!.end).toBeLessThanOrEqual(0.95);
+  });
+
+  test("picks the DTW preset from the model file name", () => {
+    expect(dtwPreset("ggml-large-v3-turbo-q5_0.bin")).toBe("large.v3.turbo");
+    expect(dtwPreset("ggml-base.en.bin")).toBe("base.en");
+    expect(dtwPreset("ggml-small.bin")).toBe("small");
+    expect(dtwPreset("my-model.bin")).toBeNull();
+  });
+
+  test("words placed in a pause move to the speech they belong to", () => {
+    const silences = [{ start: 0, end: 0.8 }, { start: 3.0, end: 4.5 }];
+    const words = alignWordsToSpeech(
+      [
+        { text: "Hey", start: 0.1, end: 0.4 }, // whisper put it in the leading pause
+        { text: "everyone,", start: 0.9, end: 1.4 },
+        { text: "my", start: 2.6, end: 2.9 },
+        { text: "videos.", start: 3.1, end: 3.5 }, // drifted into the pause after the sentence
+        { text: "Next", start: 4.6, end: 4.9 },
+      ],
+      silences,
+    );
+    expect(words[0]).toMatchObject({ start: 0.8 });
+    expect(words[3]).toMatchObject({ end: 3.0 });
+    expect(words[3]!.start).toBeGreaterThanOrEqual(words[2]!.start);
+    expect(words[4]).toMatchObject({ start: 4.6, end: 4.9 });
+  });
+
+  test("trims word edges hanging into a pause", () => {
+    const [w] = alignWordsToSpeech([{ text: "hi", start: 1, end: 3 }], [{ start: 2, end: 4 }]);
     expect(w).toMatchObject({ start: 1, end: 2 });
   });
 });

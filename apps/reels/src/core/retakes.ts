@@ -50,9 +50,35 @@ function isRetakeOf(earlier: Sentence, later: Sentence): boolean {
   const b = later.norm;
   if (a.length < 2 || b.length < 2) return false;
   const prefix = commonPrefix(a, b);
-  if (prefix >= 3) return true;
-  if (prefix >= 2 && prefix === a.length) return true; // "So today" → "So today I want…"
+  const last = earlier.words[earlier.words.length - 1]!.text;
+  const finished = /[.?!]$/.test(last) && !/[-–—]$/.test(last);
+  // A cut-off attempt: it stops right after (or soon after) the words the retake repeats.
+  if (prefix >= 2 && (prefix === a.length || (!finished && (prefix >= 3 || a.length - prefix <= 2)))) return true;
+  // A whole sentence said twice. Parallel sentences ("I want to show you X. I want to
+  // show you Y.") share a start but differ after it, so require near-identical wording.
   return a.length >= 4 && Math.abs(a.length - b.length) <= Math.max(3, a.length * 0.3) && similarity(a, b) >= 0.8;
+}
+
+type Spoken = { id: number; norm: string };
+
+/** "so the first thing, so the first thing is…" inside one sentence: the words before the restart. */
+function restartsWithin(words: TimedWord[]): [number, number][] {
+  const seq: Spoken[] = words.filter((w) => !w.filler).map((w) => ({ id: w.id, norm: norm(w.text) })).filter((w) => w.norm);
+  const cuts: [number, number][] = [];
+  for (let i = 0; i < seq.length; i++) {
+    for (let gap = 2; gap <= 10 && i + gap < seq.length; gap++) {
+      let m = 0;
+      while (m < gap && i + gap + m < seq.length && seq[i + m]!.norm === seq[i + gap + m]!.norm) m++;
+      // Restart right away ("so the first thing so the first thing"), or after one or
+      // two words of hesitation ("I think, no wait, I think").
+      if ((m === gap && m >= 2) || (m >= 3 && gap - m <= 2)) {
+        cuts.push([seq[i]!.id, seq[i + gap - 1]!.id]);
+        i += gap - 1;
+        break;
+      }
+    }
+  }
+  return cuts;
 }
 
 /** Word-id ranges to cut, given the words currently in the reel in play order. */
@@ -60,20 +86,26 @@ export function findRetakes(words: TimedWord[]): [number, number][] {
   const list = sentences(words);
   const cuts: [number, number][] = [];
   const ids = (s: Sentence): [number, number] => [s.words[0]!.id, s.words[s.words.length - 1]!.id];
+  const dropped = new Set<number>();
   for (let i = 0; i < list.length - 1; i++) {
     const a = list[i]!;
     const b = list[i + 1]!;
     if (b.words[0]!.outStart - a.words[a.words.length - 1]!.outEnd > 20) continue;
     if (isRetakeOf(a, b)) {
       cuts.push(ids(a));
+      dropped.add(i);
       continue;
     }
     // "…sorry, let me start again." between two attempts.
     const c = list[i + 2];
     if (c && b.norm.length <= 6 && RESTART.test(b.words.map((w) => w.text).join(" ")) && commonPrefix(a.norm, c.norm) >= 2) {
       cuts.push(ids(a), ids(b));
+      dropped.add(i).add(i + 1);
       i++;
     }
   }
-  return cuts;
+  list.forEach((s, i) => {
+    if (!dropped.has(i)) cuts.push(...restartsWithin(s.words));
+  });
+  return cuts.sort((x, y) => x[0] - y[0]);
 }
