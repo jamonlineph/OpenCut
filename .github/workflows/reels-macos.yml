@@ -121,7 +121,8 @@ jobs:
           done
           bun src/cli.ts show "$PROJECT"
           # Spoken words should survive silence removal (only um/uh and the false start get cut).
-          if grep -qE "~~(Hey|videos\.|word\.)~~" transcript.txt; then echo "::warning::real words were marked as cut: check word timing"; fi
+          if grep -qE "~~(Hey|everyone!?|today|videos\.|word\.)~~" transcript.txt; then echo "::warning::real words were marked as cut: check word timing"; fi
+          if ! grep -qiE "~~u+h*m+,?~~" transcript.txt; then echo "::warning::the um was not cut: check filler timing"; fi
           ls -la "$OPENCUT_WORKSPACE/outbox"
           OUT="$(ls "$OPENCUT_WORKSPACE"/outbox/*.mp4 | head -1)"
           ffprobe -v error -show_entries stream=codec_name,width,height -show_entries format=duration -of compact "$OUT"

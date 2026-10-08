@@ -90,6 +90,12 @@ describe("whisper.cpp output", () => {
     expect(dtwPreset("my-model.bin")).toBeNull();
   });
 
+  const say = (text: string, from: number, to: number) => {
+    const list = text.split(" ");
+    const d = (to - from) / list.length;
+    return list.map((t, i) => ({ text: t, start: from + i * d, end: from + (i + 1) * d }));
+  };
+
   test("speech regions are the gaps between silences", () => {
     expect(speechRegions([{ start: 0, end: 0.8 }, { start: 3, end: 4.5 }], 6)).toEqual([
       { start: 0.8, end: 3 },
@@ -132,15 +138,46 @@ describe("whisper.cpp output", () => {
         { text: "Hey", start: 0.74, end: 1.16 },
         { text: "everyone!", start: 0.74, end: 1.54 },
         { text: "Umm,", start: 0.97, end: 1.54, filler: true },
-        { text: "today", start: 2.96, end: 3.15 },
-        { text: "videos.", start: 5.78, end: 6.38 },
+        ...say("today I want to show you how I edit my videos.", 2.96, 6.38),
       ],
       silences,
       8,
     );
-    expect(words[2]).toMatchObject({ text: "Umm,", start: 2.3, end: 2.7 });
+    expect(words[2]).toMatchObject({ text: "Umm,", start: 2.3, end: 2.7, guessed: true });
     expect(words[1]!.end).toBeLessThanOrEqual(1.6);
+    expect(words[3]!.start).toBeGreaterThanOrEqual(2.9);
     expect(unmatched).toEqual([]);
+  });
+
+  // Real whisper.cpp (base.en) output for the macOS CI clip, with the silences
+  // FFmpeg found. Whisper put "Umm" in the middle of a pause and "today I" on the
+  // um's own sound, and stretched "videos.", "silences." and "word." over the
+  // pauses after them.
+  const CI_WORDS: [string, number, number, number][] = [["Hey",0,0.42,0],["everyone!",0.74,2,0],["Umm,",2,2.57,1],["today",2.95,3.15,0],["I",3.15,3.23,0],["want",3.72,3.74,0],["to",3.79,3.95,0],["show",3.95,4.41,0],["you",4.41,4.76,0],["how",4.76,5.11,0],["I",5.11,5.22,0],["edit",5.22,5.68,0],["my",5.68,5.91,0],["videos.",5.91,8.18,0],["So",8.18,8.32,0],["the",8.32,8.53,0],["first",8.89,8.91,0],["thing,",8.92,9.42,0],["so",9.42,9.62,0],["the",9.62,9.71,0],["first",9.91,10.42,0],["thing",10.42,10.92,0],["is",11.12,11.14,0],["to",11.14,11.32,0],["cut",11.32,11.42,0],["out",11.92,11.94,0],["all",11.97,12.22,0],["the",12.22,12.52,0],["silences.",12.52,13.67,0],["The",13.68,13.76,0],["second",13.81,14.07,0],["thing",14.07,14.3,0],["is",14.3,14.5,0],["adding",15.04,15.09,0],["captions",15.09,15.82,0],["to",16.08,16.1,0],["every",16.08,16.58,0],["word.",16.58,17.3,0],["Follow",17.3,17.53,0],["for",17.53,17.93,0],["more",18.09,18.21,0],["tips.",18.24,18.54,0]];
+  const CI_SILENCES = [[0,0.744],[1.541,2.96],[3.247,3.788],[6.378,8.027],[9.05,9.683],[12.368,13.62],[16.037,17.28],[18.469,19.691]];
+
+  test("real whisper output: every word lands in the stretch of speech it was said in", () => {
+    const { words, unmatched } = alignToSpeech(
+      CI_WORDS.map(([text, start, end, filler]) => ({ text, start, end, filler: filler === 1 })),
+      CI_SILENCES.map(([start, end]) => ({ start: start!, end: end! })),
+      21.333,
+    );
+    // What the clip actually says between each pair of pauses.
+    const regions = speechRegions(CI_SILENCES.map(([start, end]) => ({ start: start!, end: end! })), 21.333);
+    const phrases = regions
+      .map((r) => words.filter((w) => w.start >= r.start && w.end <= r.end).map((w) => w.text).join(" "))
+      .filter(Boolean);
+    expect(phrases).toEqual([
+      "Hey everyone!",
+      "Umm,",
+      "today I want to show you how I edit my videos.",
+      "So the first thing,",
+      "so the first thing is to cut out all the silences.",
+      "The second thing is adding captions to every word.",
+      "Follow for more tips.",
+    ]);
+    expect(words[2]).toMatchObject({ start: 2.96, end: 3.247, guessed: true });
+    expect(unmatched).toEqual([{ start: 19.691, end: 21.333 }]); // the audio ends before the video
   });
 
   test("wordless sound is reported so it can be cut", () => {
@@ -168,6 +205,27 @@ describe("edit ops", () => {
 
   test("remove_fillers drops um", () => {
     expect(kept(edit([{ op: "remove_fillers" }]))).toEqual([0, 2, 3, 4, 5, 6]);
+  });
+
+  test("a filler whose timing was guessed is only cut when it stands alone", () => {
+    const run = (guessed: boolean, start: number) => {
+      const { project, ctx } = fixture();
+      Object.assign(ctx.words[1]!, { guessed, start }); // "um," right after "Hey" (ends 1.3)
+      const r = applyEdits(ws, project, [{ op: "remove_fillers" }], ctx, SETTINGS);
+      return { kept: [...keptWordIds(ctx, placeClips(r.project))].sort((a, b) => a - b), summary: r.summary.join(" ") };
+    };
+    expect(run(false, 1.3).kept).not.toContain(1); // Whisper's own timing: cut
+    expect(run(true, 1.3)).toMatchObject({ kept: [0, 1, 2, 3, 4, 5, 6], summary: expect.stringContaining("1 with unsure timing") });
+    expect(run(true, 1.6).kept).not.toContain(1); // pauses on both sides: it is its own burst of sound
+  });
+
+  test("a pause running into wordless noise is cut in one piece", () => {
+    const { project, ctx } = fixture();
+    const asset = ctx.assets.get("v1")!;
+    asset.silences = [...asset.silences.slice(0, -1), { start: 5.95, end: 7.5 }];
+    asset.noise = [{ start: 7.5, end: 10 }]; // e.g. the audio ends before the video
+    const r = applyEdits(ws, project, [{ op: "remove_silences" }], ctx, SETTINGS).project;
+    expect(r.clips.at(-1)!.out).toBeCloseTo(5.95 + SETTINGS.cutPadding, 3);
   });
 
   test("cut and restore are inverses for the words", () => {

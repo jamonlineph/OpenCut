@@ -9,6 +9,8 @@ export type PWord = {
   start: number;
   end: number;
   filler?: boolean;
+  /** Timing inferred from the audio because Whisper's was off. */
+  guessed?: boolean;
 };
 
 /** Per-asset analysis data the timeline needs. */

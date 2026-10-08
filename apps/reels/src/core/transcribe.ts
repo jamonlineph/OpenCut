@@ -11,6 +11,8 @@ export type Word = {
   end: number;
   /** um, uh, erm... */
   filler?: boolean;
+  /** Whisper's timing was off and this placement was inferred from the audio. */
+  guessed?: boolean;
 };
 
 export type Transcript = {

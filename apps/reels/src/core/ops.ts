@@ -302,10 +302,11 @@ export function applyEdits(ws: Workspace, input: Project, ops: EditOp[], ctx: Ed
           const firstWord = spoken[0]?.start ?? Infinity;
           const lastWord = spoken[spoken.length - 1]?.end ?? -Infinity;
           const noise = (data?.noise ?? []).filter((n) => n.end <= firstWord + 0.01 || n.start >= lastWord - 0.01);
-          const silences = [...(data?.silences ?? []).filter((s) => s.end - s.start >= min), ...noise]
+          // Merge first, so a pause running into noise is one cut, not two with a sliver between.
+          const cuts = union([...(data?.silences ?? []).filter((s) => s.end - s.start >= min), ...noise])
             // Keep a little air at each side, except at the very start/end of a clip.
             .map((s) => ({ start: s.start <= clip.in ? s.start : s.start + pad, end: s.end >= clip.out ? s.end : s.end - pad }));
-          subtract({ start: clip.in, end: clip.out }, union(silences))
+          subtract({ start: clip.in, end: clip.out }, cuts)
             .filter((p) => p.end - p.start >= MIN_PIECE)
             .forEach((p, i) => next.push({ ...clip, id: i === 0 ? clip.id : nextId(project, "c"), in: round3(p.start), out: round3(p.end) }));
         }
@@ -327,6 +328,7 @@ export function applyEdits(ws: Workspace, input: Project, ops: EditOp[], ctx: Ed
           else runs.push([id, id]);
         }
         let skipped = 0;
+        let unsure = 0;
         for (const [a, b] of runs) {
           const from = word(ctx, a);
           const to = word(ctx, b);
@@ -340,9 +342,17 @@ export function applyEdits(ws: Workspace, input: Project, ops: EditOp[], ctx: Ed
             skipped += b - a + 1;
             continue;
           }
+          // Whisper's timing was off and the filler was placed by inference: only cut
+          // it when it is a burst of sound on its own, never the edge of a phrase.
+          const guessed = Array.from({ length: b - a + 1 }, (_, k) => word(ctx, a + k)).some((w) => w.guessed);
+          if (guessed && !(pauseBefore && pauseAfter)) {
+            unsure += b - a + 1;
+            continue;
+          }
           cutFromClips(project, from.asset, cutSpan(ctx, from, to, settings.cutPadding));
         }
-        summary.push(`Removed ${ids.length - skipped} filler word(s)${skipped ? ` (left ${skipped} said without a pause)` : ""}.`);
+        const left = [skipped && `${skipped} said without a pause`, unsure && `${unsure} with unsure timing`].filter(Boolean);
+        summary.push(`Removed ${ids.length - skipped - unsure} filler word(s)${left.length ? ` (left ${left.join(", ")})` : ""}.`);
         break;
       }
       case "remove_retakes": {

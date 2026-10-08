@@ -198,7 +198,7 @@ export function editContext(ws: Workspace, project: Project): EditContext {
     });
     if (asset.kind !== "video") continue;
     for (const w of a.transcript?.words ?? []) {
-      words.push({ id: words.length, asset: asset.id, text: w.text, start: w.start, end: w.end, filler: w.filler });
+      words.push({ id: words.length, asset: asset.id, text: w.text, start: w.start, end: w.end, filler: w.filler, guessed: w.guessed });
     }
   }
   return { words, assets };
