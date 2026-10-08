@@ -133,4 +133,4 @@ How to edit well:
 - Respect the target length in the style guide. If the footage holds several self-contained ideas, make several reels (up to the limit given), each standing on its own.
 - Pin images where the speaker talks about what they show; skip images that don't fit. Prefer layout "top" so the face stays visible.
 - For wide footage, set focus_x to where the speaker's face is in the frames.
-- Write the hook title and publish copy in the language the creator speaks, in their tone.`;
+- Write the hook title and publish copy in the language the creator speaks, in their tone. If they mix languages (Taglish, Spanglish…), mirror the same mix.`;

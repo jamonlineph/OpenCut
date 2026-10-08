@@ -25,13 +25,29 @@ export type Transcript = {
 };
 
 // Whisper tends to clean "um" and "uh" out of its transcript, which would make
-// them impossible to cut. A prompt written with fillers keeps them in.
-const FILLER_PROMPT = "Umm, let me think like, hmm... Okay, here's what I'm, uh, thinking.";
+// them impossible to cut. A prompt written with fillers keeps them in. It has to
+// be in the language spoken: an English prompt nudges Whisper to translate.
+const FILLER_PROMPTS: Record<string, string> = {
+  en: "Umm, let me think like, hmm... Okay, here's what I'm, uh, thinking.",
+  tl: "Ahm, so ayun, parang ganito kasi, uh, okay so here's what I'm thinking.",
+  es: "Eh, mmm, bueno... A ver, lo que estoy, eh, pensando es esto.",
+  pt: "Ahn, hmm, então... Tipo, o que eu estou, é, pensando é isso.",
+  fr: "Euh, hmm, bon... Alors, ce que je, euh, pense c'est ça.",
+  de: "Ähm, hmm, also... Was ich, äh, denke, ist Folgendes.",
+  id: "Emm, hmm, jadi... Ya, yang aku, eh, pikirin itu gini.",
+};
+export const fillerPrompt = (language: string) => FILLER_PROMPTS[language] ?? null;
 
-const FILLERS = new Set(["um", "umm", "uhm", "uh", "uhh", "er", "erm", "ah", "ahh", "hmm", "hm", "mm", "mmm", "eh"]);
+// Sounds only, never real words ("ano", "este", "like" are words too often to cut).
+const FILLERS = new Set(["um", "umm", "uhm", "uh", "er", "erm", "ah", "ahm", "eh", "ehm", "emm", "hmm", "hm", "mm", "euh", "ahn"]);
+// …except where the sound is a word: Portuguese "um" (one), German "er" (he).
+const NOT_FILLERS: Record<string, string[]> = { pt: ["um", "ahn"], de: ["er"], tr: ["eh"] };
 
-export function isFiller(text: string): boolean {
-  return FILLERS.has(text.toLowerCase().replace(/[^a-z]/g, ""));
+export function isFiller(text: string, language = "en"): boolean {
+  const plain = text.toLowerCase().normalize("NFD").replace(/[^a-z]/g, ""); // "ähm" → "ahm"
+  if (!plain || NOT_FILLERS[language]?.includes(plain)) return false;
+  // Also drawn-out versions: "ummm", "uhhh", "ahhh", "hmmm".
+  return FILLERS.has(plain) || /^(u+h+m*|u+m{2,}|a+h+m*|e+h+m*|h+m+|m{2,})$/.test(plain);
 }
 
 export function whisperBin(): string | null {
@@ -101,8 +117,20 @@ export function parseWhisperJson(json: WhisperJson): { language: string; words: 
   const cleaned = words
     .filter((w) => w.text.length > 0)
     .map((w) => ({ ...w, end: Math.max(w.end, w.start + 0.02) }));
-  for (const w of cleaned) if (isFiller(w.text)) w.filler = true;
-  return { language: json.result?.language ?? "unknown", words: cleaned };
+  const language = json.result?.language ?? "unknown";
+  for (const w of cleaned) if (isFiller(w.text, language)) w.filler = true;
+  return { language, words: cleaned };
+}
+
+/** Asks Whisper which language is spoken (one quick pass over the first 30 seconds). */
+async function detectLanguage(bin: string, model: string, wav: string, threads: string): Promise<string | null> {
+  const result = await run([bin, "-m", model, "-f", wav, "-l", "auto", "-dl", "-t", threads]).catch(() => null);
+  return parseDetectedLanguage(`${result?.stderr ?? ""}\n${result?.stdout ?? ""}`);
+}
+
+/** Reads "auto-detected language: tl (p = 0.71)" from whisper.cpp's log. */
+export function parseDetectedLanguage(log: string): string | null {
+  return log.match(/auto-detected language:\s*([a-z]{2,3})\b/i)?.[1]?.toLowerCase() ?? null;
 }
 
 /** whisper.cpp's alignment preset for a model file, for precise (DTW) word timing. */
@@ -125,6 +153,11 @@ export async function transcribe(options: {
   }
   const outBase = join(options.workDir, "whisper");
   const english = /\.en\.bin$/.test(options.modelPath);
+  const threads = String(Math.max(2, Math.min(8, availableParallelism() - 1)));
+  let language = english ? "en" : options.language || "auto";
+  // Find out what is spoken first, so the filler prompt can match it.
+  if (language === "auto") language = (await detectLanguage(bin, options.modelPath, options.wav, threads)) ?? "auto";
+  const prompt = fillerPrompt(language) ?? (language === "auto" ? fillerPrompt("en") : null);
   const args = [
     bin,
     "-m",
@@ -132,11 +165,10 @@ export async function transcribe(options: {
     "-f",
     options.wav,
     "-l",
-    english ? "en" : options.language || "auto",
+    language,
     "-t",
-    String(Math.max(2, Math.min(8, availableParallelism() - 1))),
-    "--prompt",
-    FILLER_PROMPT,
+    threads,
+    ...(prompt ? ["--prompt", prompt] : []),
     "-ojf",
     "-of",
     outBase,

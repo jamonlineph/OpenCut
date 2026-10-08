@@ -11,7 +11,7 @@ import { buildRenderPlan, cropRect, runsOf } from "../src/core/render/graph";
 import { keptWordIds, keptWords, placeClips, resolveTime, totalDuration } from "../src/core/timeline";
 import { formatTranscript } from "../src/core/transcript-view";
 import { alignToSpeech, speechRegions } from "../src/core/align";
-import { dtwPreset, parseWhisperJson } from "../src/core/transcribe";
+import { dtwPreset, fillerPrompt, isFiller, parseDetectedLanguage, parseWhisperJson } from "../src/core/transcribe";
 import { fixture, SETTINGS, testWorkspace } from "./fixtures";
 
 const ws = testWorkspace();
@@ -95,6 +95,21 @@ describe("whisper.cpp output", () => {
     const d = (to - from) / list.length;
     return list.map((t, i) => ({ text: t, start: from + i * d, end: from + (i + 1) * d }));
   };
+
+  test("fillers are sounds, and never words of the language spoken", () => {
+    for (const f of ["Umm,", "uh", "Ahm,", "hmmm.", "uhhh", "Ähm", "Euh"]) expect(isFiller(f)).toBe(true);
+    for (const w of ["am", "like", "ano", "parang", "so", "mum"]) expect(isFiller(w, "tl")).toBe(false);
+    expect(isFiller("um", "pt")).toBe(false); // "one" in Portuguese
+    expect(isFiller("er", "de")).toBe(false); // "he" in German
+    expect(isFiller("ähm", "de")).toBe(true);
+  });
+
+  test("the language is detected first so the filler prompt matches it", () => {
+    expect(parseDetectedLanguage("whisper_full_with_state: auto-detected language: tl (p = 0.712)")).toBe("tl");
+    expect(parseDetectedLanguage("no language here")).toBeNull();
+    expect(fillerPrompt("tl")).toContain("parang");
+    expect(fillerPrompt("ja")).toBeNull(); // no prompt beats an English one
+  });
 
   test("speech regions are the gaps between silences", () => {
     expect(speechRegions([{ start: 0, end: 0.8 }, { start: 3, end: 4.5 }], 6)).toEqual([
