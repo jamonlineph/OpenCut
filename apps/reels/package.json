@@ -1,0 +1,27 @@
+{
+  "name": "@opencut/reels",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "studio": "bun src/studio/server.ts",
+    "mcp": "bun src/mcp/index.ts",
+    "reels": "bun src/cli.ts",
+    "setup": "bun src/cli.ts setup",
+    "doctor": "bun src/cli.ts doctor",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@napi-rs/canvas": "^1.0.10",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "typescript": "^6.0.2"
+  }
+}

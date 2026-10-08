@@ -7,6 +7,28 @@ on screen, and drive every edit through an MCP server.
 
 ---
 
+## Status: built (first version)
+
+The plan below has been implemented as **`apps/reels`**. Setup and usage are in
+[`apps/reels/README.md`](apps/reels/README.md).
+
+| Phase | State | Where |
+| --- | --- | --- |
+| 0 Setup | ✅ `bun run setup` downloads the model and runs a doctor check | `src/cli.ts`, `src/core/setup.ts`, `src/core/capabilities.ts` |
+| 1 Ingest + analysis | ✅ ffprobe, whisper.cpp word timings, adaptive silence detection, thumbnails, HEIC via `sips`, all cached per file | `src/core/analysis.ts`, `transcribe.ts`, `silence.ts` |
+| 2 Timeline + renderer | ✅ zod project schema, word-id edit ops, one-pass FFmpeg graph, captions via libass or a built-in renderer | `src/core/schema.ts`, `ops.ts`, `render/*` |
+| 3 MCP server | ✅ 13 tools, a style-guide resource and 2 prompts; tested with a real MCP client | `src/mcp/index.ts` |
+| 4 Shorts intelligence | ✅ silences, fillers, hook to start, alternating zooms, image/B-roll overlays, music ducking, -14 LUFS. ⏳ face-tracking reframe, beat sync | `src/core/ops.ts` |
+| 5 Style + recipes | ✅ `STYLE.md` read by every agent, 3 caption styles, `make_reel` / `clips_from_long_video` prompts | `src/core/style-guide.ts` |
+| 6 Review UI | ✅ OpenCut Studio: drop zone, live preview, transcript editing, layers, renders | `src/studio/*` |
+| 7 Automation | ✅ headless CLI (`reels new … --auto --render`). ⏳ folder watcher, posting | `src/cli.ts` |
+
+Deviations from the original plan, and why:
+- **One package (`apps/reels`) instead of three.** One `bun install` and one place to run things.
+- **whisper.cpp instead of Python.** Homebrew installs it and it uses Metal on Apple Silicon, so there's no Python environment to manage.
+- **The Studio is a local Bun app, not `apps/web`.** It needs disk access to your media, which the Cloudflare-hosted web app can't have.
+- **Captions work without libass.** Homebrew's FFmpeg 9 dropped libass, so there's a built-in caption renderer (`@napi-rs/canvas` → timed PNG overlay). libass is still used when present.
+
 ## 1. Where this repo actually is today
 
 | Area | State | Implication |
@@ -242,7 +264,7 @@ AI coding agent as a single task.
 
 ## 7. Risks and gotchas to plan for
 
-- **Fork drift:** upstream is mid-rewrite. Put all our code in `apps/mcp`, `packages/reels-core`, and `workers/analyze`, and don't edit their files, so `git merge upstream/main` stays painless. If upstream ships its own MCP server or headless mode, evaluate switching to it.
+- **Fork drift:** upstream is mid-rewrite. All our code lives in `apps/reels` and doesn't edit upstream files, so `git merge upstream/main` stays painless. If upstream ships its own MCP server or headless mode, evaluate switching to it.
 - **Token cost:** never dump full word-level JSON into the chat. Segment text first, words on request, paged.
 - **LLM timestamp errors:** cut by word IDs and let the server snap times (§2).
 - **Whisper hides fillers:** see §4.
@@ -252,16 +274,17 @@ AI coding agent as a single task.
 
 ---
 
-## 8. Open questions (defaults in bold)
+## 8. Decisions made
 
-1. Transcription: **local faster-whisper/whisperX** (free, private, slower without a GPU) or an API like Deepgram (fast, detects fillers, costs a few cents per minute)?
-2. Your main machine: Windows, macOS, or Linux? Does it have an NVIDIA GPU? This affects install steps and speed.
-3. Main source footage: **talking head to camera**, podcasts/interviews (multi-speaker), or screen recordings?
-4. Mostly reels from short clips, or cutting long videos into many shorts?
-5. Caption style reference: a creator whose look you want to match?
+- **Machine:** Mac, everything local.
+- **Transcription:** whisper.cpp with `large-v3-turbo-q5_0` (multilingual).
+- **Footage:** talking head, cut into short clips.
+- **Style:** no fixed reference. Defaults are in `STYLE.md` and easy to change.
 
-## 9. Suggested first task for your coding agent
+## 9. What's next
 
-> "Implement Phase 1 of REELS_PLAN.md: create `workers/analyze` (uv, faster-whisper with
-> word timestamps, Silero VAD, ffmpeg ebur128) and `packages/reels-core/ingest.ts`
-> (ffprobe + CFR SDR proxy). Output JSON files as described. Add a README with setup steps."
+1. **Face-tracking reframe** for wide footage: Apple's Vision framework through a small Swift helper, or MediaPipe, feeding `focusX` per clip.
+2. **Folder watcher**: a new file in the inbox runs `reels new … --auto --render` or a headless agent, then sends a notification.
+3. **Animated zooms** (slow push-ins) and transitions.
+4. **Better word timing** with whisper.cpp DTW timestamps (`-dtw`), and filler detection tuned on your own voice.
+5. **Posting**: YouTube Shorts and Instagram Reels APIs behind a manual approve step, optionally tracked on a content board.
