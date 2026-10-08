@@ -17,11 +17,12 @@ The plan below has been implemented as **`apps/reels`**. Setup and usage are in
 | 0 Setup | ✅ `bun run setup` downloads the model and runs a doctor check | `src/cli.ts`, `src/core/setup.ts`, `src/core/capabilities.ts` |
 | 1 Ingest + analysis | ✅ ffprobe, whisper.cpp word timings, adaptive silence detection, thumbnails, HEIC via `sips`, all cached per file | `src/core/analysis.ts`, `transcribe.ts`, `silence.ts` |
 | 2 Timeline + renderer | ✅ zod project schema, word-id edit ops, one-pass FFmpeg graph, captions via libass or a built-in renderer | `src/core/schema.ts`, `ops.ts`, `render/*` |
-| 3 MCP server | ✅ 13 tools, a style-guide resource and 2 prompts; tested with a real MCP client | `src/mcp/index.ts` |
+| 3 MCP server | ✅ 16 tools, a style-guide resource and 2 prompts; tested with a real MCP client | `src/mcp/index.ts` |
 | 4 Shorts intelligence | ✅ silences, fillers, retakes/false starts, hook to start, multi-reel from long videos, alternating zooms, image/B-roll overlays, music ducking, -14 LUFS. ⏳ face-tracking reframe, beat sync | `src/core/ops.ts`, `src/core/retakes.ts` |
 | 5 Style + recipes | ✅ `STYLE.md` read by every agent, 3 caption styles, `make_reel` / `clips_from_long_video` prompts | `src/core/style-guide.ts` |
-| 6 Review UI | ✅ OpenCut Studio: drop zone, live preview, transcript editing, layers, renders | `src/studio/*` |
-| 7 Automation | ✅ hands-free autopilot: `auto-edit/` drop folder → AI director (Claude API with self-review, headless Claude Code/Codex over MCP, or basic) → final render → `outbox/` + notification + webhook; run at login (launchd); "ask the AI" revisions. ⏳ posting to platforms | `src/core/autopilot.ts`, `src/core/director/*`, `src/core/launchd.ts` |
+| 6 Review UI | ✅ OpenCut Studio: drop zone, live preview, transcript editing, layers, renders, review-before-export screen, settings (language, caption style) | `src/studio/*` |
+| 7 Automation | ✅ hands-free autopilot: `auto-edit/` drop folder → AI director (Claude API with self-review, headless Claude Code/Codex over MCP, or basic) → preview + wait for your OK (approve / redo with a note / discard) → final render → `outbox/` + notification + webhook; run at login (launchd); "ask the AI" revisions. ⏳ posting to platforms | `src/core/autopilot.ts`, `src/core/director/*`, `src/core/launchd.ts` |
+| 8 Mac app | ✅ OpenCut.app with FFmpeg and whisper.cpp built in (no Homebrew), menu bar, Dock drops, notifications, Start at Login; DMG built and tested on macOS CI. ⏳ notarization (needs an Apple Developer account), Intel build | `macos/*` |
 
 Deviations from the original plan, and why:
 - **One package (`apps/reels`) instead of three.** One `bun install` and one place to run things.

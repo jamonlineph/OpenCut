@@ -1,5 +1,14 @@
 import { existsSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
+
+/** True inside the single-file engine that ships in OpenCut.app (`bun build --compile`). */
+export const compiled = Bun.main.startsWith("/$bunfs") || Bun.main.includes("~BUN");
+
+/**
+ * Tools that ship inside OpenCut.app (FFmpeg, whisper.cpp) sit next to the engine
+ * in Contents/MacOS. They come first, so the app behaves the same on every Mac.
+ */
+export const BUNDLED_DIR = process.env.OPENCUT_TOOLS_DIR ?? (compiled ? dirname(process.execPath) : null);
 
 // GUI apps on macOS (Claude Desktop, Antigravity) launch MCP servers with a
 // minimal PATH that leaves out Homebrew, so look in the usual places too.
@@ -20,7 +29,7 @@ const found = new Map<string, string | null>();
 export function which(name: string, envOverride?: string): string | null {
   if (envOverride && process.env[envOverride]) return process.env[envOverride]!;
   if (found.has(name)) return found.get(name)!;
-  const dirs = [...(process.env.PATH ?? "").split(delimiter), ...EXTRA_BIN_DIRS].filter(Boolean);
+  const dirs = [BUNDLED_DIR, ...(process.env.PATH ?? "").split(delimiter), ...EXTRA_BIN_DIRS].filter((d): d is string => Boolean(d));
   for (const dir of dirs) {
     const candidate = join(dir, name);
     if (existsSync(candidate)) {
@@ -37,6 +46,9 @@ export function requireBin(name: string, envOverride: string, hint: string): str
   if (!bin) throw new Error(`${name} not found. ${hint}`);
   return bin;
 }
+
+/** True when a tool path is one of the copies that ship with the app. */
+export const isBundled = (path: string | null) => Boolean(path && BUNDLED_DIR && dirname(path) === BUNDLED_DIR);
 
 export const ffmpegBin = () => requireBin("ffmpeg", "OPENCUT_FFMPEG", "Install it with: brew install ffmpeg");
 export const ffprobeBin = () => requireBin("ffprobe", "OPENCUT_FFPROBE", "Install it with: brew install ffmpeg");

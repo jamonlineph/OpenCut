@@ -30,29 +30,36 @@ a few frames and your photos.
 
 **OpenCut.app** is the easiest way to use all of this. It opens the Studio in its own window and keeps the
 autopilot running in the menu bar (✂), even with the window closed. Drop videos
-on its Dock icon to auto-edit them. When a reel is ready, you get a notification
-that opens it.
+on its Dock icon to auto-edit them. When a reel is ready for your OK, you get a
+notification that opens its preview.
 
-**Option A: build it on your Mac (about 2 minutes, no security prompts).** In Terminal:
+The downloaded app has FFmpeg and whisper.cpp built in, so it needs nothing else:
+no Homebrew, no Terminal.
 
-```sh
-brew install ffmpeg whisper-cpp oven-sh/bun/bun   # tools (Homebrew: https://brew.sh)
-cd path/to/OpenCut/apps/reels
-bun run app                                        # builds, copies to /Applications, opens it
-```
-
-**Option B: download it.** Every push builds a disk image on GitHub: open the
+**Option A: download it.** Every push builds a disk image on GitHub: open the
 repository's **Actions** tab → **OpenCut Reels (macOS app)** → the latest run →
 **Artifacts** → `OpenCut-macOS-arm64` (Apple Silicon). Unzip, open `OpenCut.dmg`,
 and drag OpenCut to Applications. The build isn't notarized by Apple, so the first
 time macOS refuses to open it. Go to **System Settings → Privacy & Security** and
 click **Open Anyway**, or run `xattr -dr com.apple.quarantine /Applications/OpenCut.app`.
 
+**Option B: build it on your Mac (no security prompts).** In Terminal:
+
+```sh
+brew install ffmpeg whisper-cpp oven-sh/bun/bun   # tools (Homebrew: https://brew.sh)
+cd path/to/OpenCut/apps/reels
+bun run app                                        # about 2 minutes: builds, copies to /Applications, opens it
+```
+
+This build uses Homebrew's FFmpeg and whisper.cpp. To build them into the app
+instead, like the download (about 10 minutes the first time, needs `brew install cmake`):
+`bash macos/build.sh --tools --install`.
+
 On first launch the home screen walks you through the rest:
 
-1. **Install tools.** One click opens Terminal with `brew install ffmpeg whisper-cpp`.
-2. **Download the speech model** (about 550 MB) with a progress bar.
-3. **Connect your AI.** One-click buttons for Claude Code, Claude Desktop and Codex, plus copy-paste config for Antigravity.
+1. **Download the speech model** (about 550 MB) with a progress bar.
+2. **Connect your AI.** One-click buttons for Claude Code, Claude Desktop and Codex, plus copy-paste config for Antigravity.
+3. **Settings:** the language you speak (English, Tagalog/Taglish, Spanish… or auto-detect), caption style, and whether to ask before exporting.
 
 Turn on **Start at Login** in the ✂ menu so drops are edited any time. Updating
 works the same way: pull the latest code and run `bun run app` again.
@@ -72,9 +79,11 @@ bun run reels install-agent  # start OpenCut at login, so drops work any time
 says which AI will edit your drops (see [Which AI edits](#which-ai-edits)).
 Don't use `install-agent` and the app's Start at Login together: pick one.
 
-> **Model choice.** The default `large-v3-turbo-q5_0` is accurate and fast on Apple
-> Silicon (M1 or newer), and handles English, Filipino/Tagalog, Spanish and most
-> other languages. On an Intel Mac, use `bun run setup -- --model small.en` (English only).
+> **Model and language.** The default `large-v3-turbo-q5_0` is accurate and fast on Apple
+> Silicon (M1 or newer), and handles English, Filipino/Tagalog (including Taglish), Spanish
+> and most other languages. Pick your language in the Studio's **Settings**, or leave it on
+> auto-detect: OpenCut checks the language first, so Whisper keeps your "um"s (to cut them)
+> without translating anything. On an Intel Mac, use `bun run setup -- --model small.en` (English only).
 
 ## Hands-free: drop a video, get a reel
 
@@ -83,14 +92,23 @@ With OpenCut running (the app, `install-agent`, or `bun start`):
 1. **Drop** a video onto the OpenCut Dock icon, into `~/Movies/OpenCut/auto-edit` in Finder, or onto the Studio window with **Auto-edit drops with AI** on.
    - **Add context** in the same drop: photos to show, a music track, and a `notes.txt` saying what the video is about, who it's for and your call to action.
    - **Several clips for one reel?** Put them in a folder and drop the folder. Clips play in name order, and photos and notes inside go with them.
-2. OpenCut transcribes the video, the AI decides the edit (and checks its own preview), and the final render is made.
-3. You get a **notification**. Each finished reel is in `~/Movies/OpenCut/outbox`: `2026-10-08 My title.mp4`, plus a `.txt` file with the title, caption and hashtags.
+2. OpenCut transcribes the video, the AI decides the edit (and checks its own preview), and makes a quick preview.
+3. You get a **notification: "Your reel needs your OK"**. It opens the review screen:
+   - watch the preview, and see the transcript with the cut words struck out;
+   - **Approve & export**, or export just one of several reels;
+   - type what should change (*"start with the joke"*, *"cut the part about pricing"*) and press **Redo with this note**: the AI changes it and you get a new preview;
+   - **Fix it myself** opens the reel in the editor; approving then exports your version;
+   - or **Discard** it (the reel stays in the Studio).
+4. Approved reels are in `~/Movies/OpenCut/outbox`: `2026-10-08 My title.mp4`, plus a `.txt` file with the title, caption and hashtags.
 
-Open the reel in the Studio to tweak it, or go to the **AI ✨** tab and ask: *"make the hook punchier"*,
-*"cut the part about pricing"*, *"put logo.png at the end"*.
+Trust the edits and want it fully hands-free? Untick **Ask me before exporting** (under Autopilot,
+or in Settings) and reels go straight to the outbox with a "ready" notification.
 
-Run it once from Terminal: `bun run reels auto-edit talk.mov photo.jpg notes.txt`.
-See what it did: `bun run reels jobs` (retry a failed one with `bun run reels retry JOB`).
+You can still open any reel in the Studio later to tweak it, or ask in the **AI ✨** tab.
+
+Run it once from Terminal: `bun run reels auto-edit talk.mov photo.jpg notes.txt` (add `--review` to wait for your OK).
+See what it did: `bun run reels jobs`. Then `bun run reels approve JOB`, `revise JOB PROJECT "what to change"`,
+`discard JOB`, or `retry JOB` for a failed one.
 
 ### Which AI edits
 
@@ -110,8 +128,8 @@ echo 'ANTHROPIC_API_KEY=sk-ant-...' >> ~/Movies/OpenCut/.env
 ```
 
 Other `autopilot` settings: `maxReels` (most reels from one video, default 3), `review`
-(let the AI check its preview, default on), `notify`, `agentTimeoutMinutes`, and
-`webhookUrl`. A webhook receives a JSON summary of every finished reel (title,
+(let the AI check its preview, default on), `approve` (wait for your OK before
+exporting, default on), `notify`, `agentTimeoutMinutes`, and `webhookUrl`. A webhook receives a JSON summary of every finished reel (title,
 caption, hashtags, file path), so you can connect Make, Zapier, n8n or a
 Monday.com board.
 
@@ -220,12 +238,15 @@ All of these suit Shortcuts or scheduled jobs.
 | Captions use the wrong font | Put the font file in `~/Movies/OpenCut/brand/fonts` and set it with the captions `font` option |
 | Live preview is black | The browser can't play that video format. Render a preview instead, or use Safari for iPhone HEVC clips |
 | Something rendered oddly | Each project folder has `last-render.sh`, the exact FFmpeg command used |
+| A reel never reached the outbox | It may be waiting for your OK: look for **needs your OK** in the Studio's Autopilot panel, or untick **Ask me before exporting** |
+| Whisper translated instead of transcribing | Set your language in the Studio's **Settings** instead of auto-detect (for Taglish try "Tagalog / Taglish", then "English") |
 | A drop wasn't picked up | OpenCut must be running (`bun start` or `install-agent`). Check the Autopilot panel in the Studio, `bun run reels jobs`, and `~/Movies/OpenCut/.autopilot/studio.log` |
 | The AI says "basic" | Install and log in to Claude Code, or add `ANTHROPIC_API_KEY` to `~/Movies/OpenCut/.env`, then restart OpenCut |
 | Stop starting at login | `bun run reels uninstall-agent` |
 
 Captions are drawn with libass when your FFmpeg has it, and with a built-in renderer
-when it doesn't (Homebrew's FFmpeg currently doesn't), so both work.
+when it doesn't (Homebrew's FFmpeg and the one built into the app don't), so both work.
+The app's own FFmpeg encodes with Apple's VideoToolbox; with Homebrew's it uses x264.
 
 ## How it works
 

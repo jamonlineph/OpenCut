@@ -15,12 +15,12 @@ jobs:
   app:
     name: Build and smoke-test OpenCut.app
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: apps/reels
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -37,8 +37,23 @@ jobs:
       - name: Unit tests
         run: bun test
 
+      # FFmpeg and whisper.cpp built for the app (about 10 minutes, then cached).
+      - name: Cache bundled tools
+        uses: actions/cache@v6
+        with:
+          path: apps/reels/.tools
+          key: tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/reels/macos/build-tools.sh') }}
+
+      - name: Build FFmpeg and whisper.cpp for the app
+        run: |
+          command -v cmake >/dev/null || brew install cmake
+          bash macos/build-tools.sh
+
       - name: Build OpenCut.app and DMG
-        run: bash macos/build.sh --dmg
+        run: |
+          bash macos/build.sh --dmg
+          ls -la build/OpenCut.app/Contents/MacOS build/OpenCut.app/Contents/Resources/licenses
+          du -sh build/OpenCut.app build/OpenCut.dmg
 
       - name: Engine starts the Studio
         env:
@@ -53,6 +68,37 @@ jobs:
           curl -sf localhost:4511/ | grep -q '<div id="root">'
           kill %1
 
+      - name: The app edits a real clip with its own tools (no Homebrew)
+        env:
+          OPENCUT_WORKSPACE: ${{ runner.temp }}/bundled-ws
+        run: |
+          BIN="$PWD/build/OpenCut.app/Contents/MacOS"
+          ENGINE="$BIN/opencut-engine"
+          mkdir -p "$OPENCUT_WORKSPACE/models"
+          # Multilingual model with language auto-detection, like a fresh install.
+          curl -fsSL -o "$OPENCUT_WORKSPACE/models/ggml-base.bin" https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin
+          echo '{"whisperModel":"ggml-base.bin","language":"auto","autopilot":{"director":"basic","notify":false}}' > "$OPENCUT_WORKSPACE/settings.json"
+          "$ENGINE" doctor | tee doctor.txt
+          grep -q "built into OpenCut" doctor.txt
+          say -o speech.aiff "[[slnc 700]] Hey everyone. [[slnc 1100]] Um, [[slnc 500]] here are three quick tips for better videos. [[slnc 1200]] First, cut out every silence. [[slnc 900]] Follow for more. [[slnc 800]]"
+          "$BIN/ffmpeg" -v error -f lavfi -i "testsrc2=s=1920x1080:r=30" -i speech.aiff -shortest \
+            -c:v h264_videotoolbox -allow_sw 1 -b:v 6M -pix_fmt yuv420p -c:a aac talk.mp4
+          "$BIN/ffmpeg" -v error -i talk.mp4 -ac 1 -ar 16000 talk.wav
+          "$BIN/whisper-cli" -m "$OPENCUT_WORKSPACE/models/ggml-base.bin" -f talk.wav -l auto -dl 2>&1 | grep -i "auto-detected language"
+          # Review flow: edit, wait for OK with a preview, then approve and export.
+          "$ENGINE" auto-edit talk.mp4 --review | tee job.txt
+          JOB="$(grep -o 'approve [^ ]*' job.txt | head -1 | cut -d' ' -f2)"
+          test -n "$JOB"
+          test -z "$(ls -A "$OPENCUT_WORKSPACE/outbox" 2>/dev/null)"
+          "$ENGINE" approve "$JOB"
+          PROJECT="$("$ENGINE" list | head -1 | cut -d' ' -f1)"
+          "$ENGINE" transcript "$PROJECT"
+          OUT="$(ls "$OPENCUT_WORKSPACE"/outbox/*.mp4 | head -1)"
+          "$BIN/ffprobe" -v error -show_entries stream=codec_name,width,height -show_entries format=duration -of compact "$OUT"
+          test -s "$OUT"
+          # Captions are drawn by the built-in renderer (this FFmpeg has no libass).
+          grep -qF "captions.ffconcat" "$OPENCUT_WORKSPACE"/projects/*/last-render.sh
+
       - name: App launches its engine and stops it on quit
         run: |
           open build/OpenCut.app
@@ -64,7 +110,7 @@ jobs:
           echo "engine stopped with the app"
 
       - name: Upload DMG
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: OpenCut-macOS-arm64
           path: apps/reels/build/OpenCut.dmg
@@ -80,7 +126,7 @@ jobs:
     env:
       OPENCUT_WORKSPACE: ${{ github.workspace }}/e2e-workspace
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -130,7 +176,7 @@ jobs:
 
       - name: Upload the finished reel
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-reel
           path: |

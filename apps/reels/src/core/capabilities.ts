@@ -1,7 +1,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
-import { ffmpegBin, run, which } from "./exec";
+import { ffmpegBin, isBundled, run, which } from "./exec";
 import { whisperBin } from "./transcribe";
 import { readSettings, type Workspace } from "./workspace";
 
@@ -53,7 +53,7 @@ export async function doctor(ws: Workspace): Promise<Check[]> {
   let caps: Capabilities | null = null;
   try {
     caps = await capabilities();
-    checks.push({ name: "FFmpeg", ok: true, detail: `${caps.version} at ${caps.ffmpeg}` });
+    checks.push({ name: "FFmpeg", ok: true, detail: isBundled(caps.ffmpeg) ? `${caps.version} (built into OpenCut)` : `${caps.version} at ${caps.ffmpeg}` });
   } catch (e) {
     checks.push({ name: "FFmpeg", ok: false, detail: String((e as Error).message), fix: "brew install ffmpeg" });
   }
@@ -68,7 +68,7 @@ export async function doctor(ws: Workspace): Promise<Check[]> {
     checks.push({ name: "HDR (iPhone) footage", ok: true, detail: caps.tonemap ? "exact tone mapping (zimg)" : "approximate color conversion (fine for most clips)" });
   }
   const whisper = whisperBin();
-  checks.push({ name: "whisper.cpp", ok: Boolean(whisper), detail: whisper ?? "not found", fix: whisper ? undefined : "brew install whisper-cpp" });
+  checks.push({ name: "whisper.cpp", ok: Boolean(whisper), detail: isBundled(whisper) ? "built into OpenCut" : (whisper ?? "not found"), fix: whisper ? undefined : "brew install whisper-cpp" });
   const model = join(ws.models, readSettings(ws).whisperModel);
   checks.push({ name: "Whisper model", ok: existsSync(model), detail: existsSync(model) ? model : `missing: ${model}`, fix: existsSync(model) ? undefined : "bun run setup" });
   const fonts = existsSync(ws.fonts) ? readdirSync(ws.fonts).filter((f) => /\.(ttf|otf)$/i.test(f)) : [];

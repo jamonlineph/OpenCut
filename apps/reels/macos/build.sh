@@ -4,17 +4,22 @@
 #   bash macos/build.sh             → build/OpenCut.app
 #   bash macos/build.sh --install   → also copies it to /Applications and opens it
 #   bash macos/build.sh --dmg       → also makes build/OpenCut.dmg to share
+#   bash macos/build.sh --tools     → also builds FFmpeg + whisper.cpp into the app
+#                                     (no Homebrew needed to run it; ~10 min once)
 #
+# Tools built earlier with macos/build-tools.sh (in .tools/) are always bundled.
 # Needs Bun and the Xcode Command Line Tools (Homebrew installs them).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 INSTALL=false
 DMG=false
+TOOLS=false
 for arg in "$@"; do
   case "$arg" in
     --install) INSTALL=true ;;
     --dmg) DMG=true ;;
+    --tools) TOOLS=true ;;
     *) echo "Unknown option: $arg" >&2; exit 2 ;;
   esac
 done
@@ -31,6 +36,11 @@ APP="build/OpenCut.app"
 rm -rf build
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
+if $TOOLS; then
+  echo "→ Building FFmpeg and whisper.cpp for the app"
+  bash macos/build-tools.sh
+fi
+
 echo "→ Installing dependencies"
 bun install --frozen-lockfile
 
@@ -46,8 +56,19 @@ bun macos/make-icon.ts ../../brand/marks/icon.svg "$APP/Contents/Resources/AppIc
 sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD/" macos/Info.plist > "$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
 
+if [[ -x .tools/bin/ffmpeg && -x .tools/bin/whisper-cli ]]; then
+  echo "→ Bundling FFmpeg and whisper.cpp"
+  cp .tools/bin/* "$APP/Contents/MacOS/"
+  mkdir -p "$APP/Contents/Resources/licenses"
+  cp .tools/licenses/* "$APP/Contents/Resources/licenses/"
+else
+  echo "   (FFmpeg and whisper.cpp not bundled: the app uses Homebrew's. Add --tools to bundle them.)"
+fi
+
 echo "→ Signing (ad-hoc, for this Mac)"
-codesign --force --sign - "$APP/Contents/MacOS/opencut-engine"
+for helper in "$APP"/Contents/MacOS/*; do
+  [[ "$(basename "$helper")" == "OpenCut" ]] || codesign --force --sign - "$helper"
+done
 codesign --force --sign - "$APP"
 codesign --verify --deep --strict "$APP"
 

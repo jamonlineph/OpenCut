@@ -690,7 +690,7 @@ function SetupCard({ notify }: { notify: (t: string, err?: boolean) => void }) {
       <div className="step">
         <span>{toolsReady ? "✅" : "1."}</span>
         <div>
-          <b>Video and speech tools</b> (FFmpeg and whisper.cpp, free, from Homebrew)
+          <b>Video and speech tools</b> {toolsReady ? <span className="hint">ready</span> : "(FFmpeg and whisper.cpp, free, from Homebrew)"}
           {!toolsReady && (
             <div className="row">
               <button className="primary" onClick={() => post("/api/setup/brew")}>

@@ -1,9 +1,8 @@
 import { resolve } from "node:path";
 
-import { which } from "./exec";
+import { compiled, which } from "./exec";
 
-/** True inside the single-file engine that ships in OpenCut.app (`bun build --compile`). */
-export const compiled = Bun.main.startsWith("/$bunfs") || Bun.main.includes("~BUN");
+export { compiled };
 
 const SCRIPTS = {
   studio: "../studio/server.ts",

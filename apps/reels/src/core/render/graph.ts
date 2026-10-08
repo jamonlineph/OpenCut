@@ -223,7 +223,8 @@ export function buildRenderPlan(project: Project, ctx: EditContext, options: Gra
   const video =
     options.encoder === "libx264"
       ? ["-c:v", "libx264", "-preset", options.quality === "final" ? "medium" : "ultrafast", "-crf", options.quality === "final" ? "19" : "27", "-profile:v", "high"]
-      : ["-c:v", "h264_videotoolbox", "-b:v", options.quality === "final" ? "14M" : "5M", "-profile:v", "high"];
+      : // allow_sw: Apple's software encoder when there is no hardware one (e.g. in a VM).
+        ["-c:v", "h264_videotoolbox", "-b:v", options.quality === "final" ? "14M" : "5M", "-profile:v", "high", "-allow_sw", "1"];
 
   return {
     duration: total,
