@@ -27,6 +27,17 @@
 
 You can still find the previous version at [opencut-app/opencut-classic](https://github.com/opencut-app/opencut-classic), which is the one to reach for today. [opencut.app](https://opencut.app) still runs the classic version. The rewrite will live at [new.opencut.app](https://new.opencut.app) until it's ready to take over.
 
+## OpenCut Reels (this fork)
+
+[`apps/reels`](apps/reels/README.md) is a local, AI-drivable editor for vertical
+short-form video: drop talking-head clips in, and it transcribes them, cuts silences
+and filler words, adds captions, zooms, images and music, and renders 9:16 MP4s.
+It includes an MCP server for Claude, Codex and Antigravity, and a local Studio UI.
+
+```sh
+cd apps/reels && bun install && bun run setup && bun run studio
+```
+
 ## Development
 
 Install [proto](https://moonrepo.dev/proto) if you haven't already:
