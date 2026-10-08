@@ -35,6 +35,7 @@ export function fixture(): { project: Project; ctx: EditContext } {
           audible: true,
           hdr: false,
           source: "/media/talk.mp4",
+          noise: [],
           silences: [
             { start: 0, end: 0.95 },
             { start: 1.35, end: 1.55 },

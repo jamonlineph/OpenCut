@@ -18,6 +18,8 @@ export type Transcript = {
   model: string;
   language: string;
   words: Word[];
+  /** Stretches of sound no word matched (breaths, clicks, noise). */
+  noise?: Interval[];
 };
 
 // Whisper tends to clean "um" and "uh" out of its transcript, which would make
@@ -99,56 +101,6 @@ export function parseWhisperJson(json: WhisperJson): { language: string; words: 
     .map((w) => ({ ...w, end: Math.max(w.end, w.start + 0.02) }));
   for (const w of cleaned) if (isFiller(w.text)) w.filler = true;
   return { language: json.result?.language ?? "unknown", words: cleaned };
-}
-
-/**
- * Whisper's word times can drift into the pauses around them, which would make
- * silence removal look like it cut real words (and drop them from captions).
- * Uses the detected silences as ground truth:
- * - a word sitting almost entirely in a pause moves to the speech it belongs to
- *   (the next sentence if it's closer to the next word, else the previous one);
- * - word edges hanging into a pause are trimmed back to the speech.
- */
-export function alignWordsToSpeech(words: Word[], silences: Interval[]): Word[] {
-  const sil = [...silences].sort((a, b) => a.start - b.start);
-  const silentPart = (start: number, end: number) =>
-    sil.reduce((sum, s) => sum + Math.max(0, Math.min(end, s.end) - Math.max(start, s.start)), 0);
-  const out: Word[] = [];
-  words.forEach((word, i) => {
-    let { start, end } = word;
-    const duration = Math.max(0.05, end - start);
-    if (silentPart(start, end) > duration * 0.7) {
-      const center = (start + end) / 2;
-      const pause = sil.find((s) => center >= s.start && center <= s.end) ?? sil.find((s) => s.end > start && s.start < end);
-      if (pause) {
-        const prev = words[i - 1];
-        const next = words[i + 1];
-        const gapBefore = prev ? start - prev.end : Infinity;
-        const gapAfter = next ? next.start - end : Infinity;
-        const length = Math.min(duration, 0.6);
-        // Punctuation says which side a word belongs to; fall back to the closer neighbour.
-        const endsSentence = /[.?!,;:]$/.test(word.text);
-        const startsSentence = !prev || /[.?!]$/.test(prev.text);
-        const forward = pause.start <= 0.001 || (startsSentence && !endsSentence) || (!endsSentence && gapBefore > gapAfter);
-        if (forward) {
-          start = pause.end;
-          end = pause.end + length;
-        } else {
-          end = pause.start;
-          start = Math.max(0, pause.start - length);
-        }
-      }
-    }
-    for (const s of sil) {
-      if (start >= s.start && start < s.end && s.end < end) start = s.end;
-      if (end > s.start && end <= s.end && s.start > start) end = s.start;
-    }
-    const prev = out[out.length - 1];
-    if (prev && start < prev.start) start = prev.start + 0.01;
-    end = Math.max(end, start + 0.05);
-    out.push({ ...word, start: Math.round(start * 1000) / 1000, end: Math.round(end * 1000) / 1000 });
-  });
-  return out;
 }
 
 /** whisper.cpp's alignment preset for a model file, for precise (DTW) word timing. */

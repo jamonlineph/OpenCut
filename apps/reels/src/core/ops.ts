@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { round3, subtract, type Interval } from "./intervals";
+import { round3, subtract, union, type Interval } from "./intervals";
 import { addAsset, findAsset, fullClips } from "./project";
 import { Captions, nextId, OverlayLayout, TextItem, TimeRef, type Clip, type Project } from "./schema";
 import { findRetakes } from "./retakes";
@@ -295,11 +295,17 @@ export function applyEdits(ws: Workspace, input: Project, ops: EditOp[], ctx: Ed
         const count = project.clips.length;
         const next: Clip[] = [];
         for (const clip of project.clips) {
-          const silences = (ctx.assets.get(clip.asset)?.silences ?? [])
-            .filter((s) => s.end - s.start >= min)
+          const data = ctx.assets.get(clip.asset);
+          // Wordless sound before the first or after the last word (a breath, reaching
+          // for the camera) goes too. Mid-video it might be a mistimed word, so it stays.
+          const spoken = ctx.words.filter((w) => w.asset === clip.asset);
+          const firstWord = spoken[0]?.start ?? Infinity;
+          const lastWord = spoken[spoken.length - 1]?.end ?? -Infinity;
+          const noise = (data?.noise ?? []).filter((n) => n.end <= firstWord + 0.01 || n.start >= lastWord - 0.01);
+          const silences = [...(data?.silences ?? []).filter((s) => s.end - s.start >= min), ...noise]
             // Keep a little air at each side, except at the very start/end of a clip.
             .map((s) => ({ start: s.start <= clip.in ? s.start : s.start + pad, end: s.end >= clip.out ? s.end : s.end - pad }));
-          subtract({ start: clip.in, end: clip.out }, silences)
+          subtract({ start: clip.in, end: clip.out }, union(silences))
             .filter((p) => p.end - p.start >= MIN_PIECE)
             .forEach((p, i) => next.push({ ...clip, id: i === 0 ? clip.id : nextId(project, "c"), in: round3(p.start), out: round3(p.end) }));
         }
@@ -320,12 +326,23 @@ export function applyEdits(ws: Workspace, input: Project, ops: EditOp[], ctx: Ed
           if (last && last[1] === id - 1) last[1] = id;
           else runs.push([id, id]);
         }
+        let skipped = 0;
         for (const [a, b] of runs) {
           const from = word(ctx, a);
           const to = word(ctx, b);
+          // A filler said without any pause around it has guessed timing; cutting it
+          // could clip the next word, so leave it (captions hide it anyway).
+          const { prev } = neighbors(ctx, from);
+          const { next } = neighbors(ctx, to);
+          const pauseBefore = !prev || from.start - prev.end >= 0.08;
+          const pauseAfter = !next || next.start - to.end >= 0.08;
+          if (!pauseBefore && !pauseAfter) {
+            skipped += b - a + 1;
+            continue;
+          }
           cutFromClips(project, from.asset, cutSpan(ctx, from, to, settings.cutPadding));
         }
-        summary.push(`Removed ${ids.length} filler word(s).`);
+        summary.push(`Removed ${ids.length - skipped} filler word(s)${skipped ? ` (left ${skipped} said without a pause)` : ""}.`);
         break;
       }
       case "remove_retakes": {

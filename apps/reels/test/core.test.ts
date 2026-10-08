@@ -10,7 +10,8 @@ import { buildCaptionEvents, captionChunks, toAss } from "../src/core/render/cap
 import { buildRenderPlan, cropRect, runsOf } from "../src/core/render/graph";
 import { keptWordIds, keptWords, placeClips, resolveTime, totalDuration } from "../src/core/timeline";
 import { formatTranscript } from "../src/core/transcript-view";
-import { alignWordsToSpeech, dtwPreset, parseWhisperJson } from "../src/core/transcribe";
+import { alignToSpeech, speechRegions } from "../src/core/align";
+import { dtwPreset, parseWhisperJson } from "../src/core/transcribe";
 import { fixture, SETTINGS, testWorkspace } from "./fixtures";
 
 const ws = testWorkspace();
@@ -89,27 +90,62 @@ describe("whisper.cpp output", () => {
     expect(dtwPreset("my-model.bin")).toBeNull();
   });
 
-  test("words placed in a pause move to the speech they belong to", () => {
+  test("speech regions are the gaps between silences", () => {
+    expect(speechRegions([{ start: 0, end: 0.8 }, { start: 3, end: 4.5 }], 6)).toEqual([
+      { start: 0.8, end: 3 },
+      { start: 4.5, end: 6 },
+    ]);
+  });
+
+  test("words drifting into pauses are moved into the speech", () => {
     const silences = [{ start: 0, end: 0.8 }, { start: 3.0, end: 4.5 }];
-    const words = alignWordsToSpeech(
+    const { words } = alignToSpeech(
       [
-        { text: "Hey", start: 0.1, end: 0.4 }, // whisper put it in the leading pause
+        { text: "Hey", start: 0.1, end: 0.4 }, // stamped in the leading pause
         { text: "everyone,", start: 0.9, end: 1.4 },
         { text: "my", start: 2.6, end: 2.9 },
         { text: "videos.", start: 3.1, end: 3.5 }, // drifted into the pause after the sentence
         { text: "Next", start: 4.6, end: 4.9 },
       ],
       silences,
+      6,
     );
-    expect(words[0]).toMatchObject({ start: 0.8 });
-    expect(words[3]).toMatchObject({ end: 3.0 });
-    expect(words[3]!.start).toBeGreaterThanOrEqual(words[2]!.start);
-    expect(words[4]).toMatchObject({ start: 4.6, end: 4.9 });
+    for (const w of words) {
+      const inSpeech = (w.start >= 0.8 && w.end <= 3.0) || (w.start >= 4.5 && w.end <= 6);
+      expect(inSpeech).toBe(true);
+    }
+    expect(words.map((w) => w.start)).toEqual([...words.map((w) => w.start)].sort((a, b) => a - b));
+    expect(words[4]!.start).toBeGreaterThanOrEqual(4.5);
   });
 
-  test("trims word edges hanging into a pause", () => {
-    const [w] = alignWordsToSpeech([{ text: "hi", start: 1, end: 3 }], [{ start: 2, end: 4 }]);
-    expect(w).toMatchObject({ start: 1, end: 2 });
+  test("a filler stamped onto its neighbour gets its own stretch of sound back", () => {
+    // Real whisper.cpp output from CI: "Umm" was timed on top of "everyone", while
+    // its audio is the short burst of sound between the two sentences.
+    const silences = [
+      { start: 0, end: 0.7 },
+      { start: 1.6, end: 2.3 },
+      { start: 2.7, end: 2.9 },
+      { start: 6.5, end: 8 },
+    ];
+    const { words, unmatched } = alignToSpeech(
+      [
+        { text: "Hey", start: 0.74, end: 1.16 },
+        { text: "everyone!", start: 0.74, end: 1.54 },
+        { text: "Umm,", start: 0.97, end: 1.54, filler: true },
+        { text: "today", start: 2.96, end: 3.15 },
+        { text: "videos.", start: 5.78, end: 6.38 },
+      ],
+      silences,
+      8,
+    );
+    expect(words[2]).toMatchObject({ text: "Umm,", start: 2.3, end: 2.7 });
+    expect(words[1]!.end).toBeLessThanOrEqual(1.6);
+    expect(unmatched).toEqual([]);
+  });
+
+  test("wordless sound is reported so it can be cut", () => {
+    const { unmatched } = alignToSpeech([{ text: "Hi.", start: 0.5, end: 0.9 }], [{ start: 1, end: 3 }], 4);
+    expect(unmatched).toEqual([{ start: 3, end: 4 }]);
   });
 });
 

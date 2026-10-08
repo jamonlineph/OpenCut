@@ -114,6 +114,11 @@ jobs:
           PROJECT="$(bun src/cli.ts list | head -1 | cut -d' ' -f1)"
           bun src/cli.ts transcript "$PROJECT" | tee transcript.txt
           bun src/cli.ts transcript "$PROJECT" --words
+          # Raw whisper words and detected silences, for alignment regression tests.
+          for d in "$OPENCUT_WORKSPACE"/.cache/*/; do
+            [ -f "$d/transcript.raw.json" ] || continue
+            bun -e 'const [t, s] = process.argv.slice(1).map((f) => require(f)); console.log("RAW_WORDS " + JSON.stringify(t.words.map((w) => [w.text, w.start, w.end, w.filler ? 1 : 0]))); console.log("SILENCES " + JSON.stringify(s.silences.map((x) => [x.start, x.end])))' "$d/transcript.raw.json" "$d/silence.json"
+          done
           bun src/cli.ts show "$PROJECT"
           # Spoken words should survive silence removal (only um/uh and the false start get cut).
           if grep -qE "~~(Hey|videos\.|word\.)~~" transcript.txt; then echo "::warning::real words were marked as cut: check word timing"; fi

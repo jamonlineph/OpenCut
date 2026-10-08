@@ -8,7 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     private var web: WebController!
     private var statusItem: NSStatusItem!
     private let statusLine = NSMenuItem(title: "Starting OpenCut…", action: nil, keyEquivalent: "")
-    private let loginItem = NSMenuItem(title: "Start at Login", action: #selector(toggleStartAtLogin), keyEquivalent: "")
+    private let loginItem = NSMenuItem(title: "Start at Login", action: #selector(AppDelegate.toggleStartAtLogin), keyEquivalent: "")
     private var jobStates: [String: String] = [:]
     private var firstPoll = true
     private var pollTimer: Timer?

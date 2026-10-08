@@ -193,6 +193,7 @@ export function editContext(ws: Workspace, project: Project): EditContext {
       audible: (a.info?.hasAudio ?? false) && (a.info?.kind === "audio" || (a.silence?.meanVolumeDb ?? 0) > -80),
       hdr: a.info?.hdr ?? false,
       silences: a.silence?.silences ?? [],
+      noise: a.transcript?.noise ?? [],
       source: a.source,
     });
     if (asset.kind !== "video") continue;

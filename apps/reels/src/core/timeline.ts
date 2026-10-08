@@ -23,6 +23,8 @@ export type AssetData = {
   audible: boolean;
   hdr: boolean;
   silences: Interval[];
+  /** Sound with no words in it (breaths, clicks, room noise). */
+  noise: Interval[];
   /** Absolute path to decode when rendering. */
   source: string;
 };
