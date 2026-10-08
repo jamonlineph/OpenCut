@@ -1,0 +1,130 @@
+name: OpenCut Reels (macOS app)
+
+on:
+  push:
+    paths:
+      - "apps/reels/**"
+      - ".github/workflows/reels-macos.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: reels-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  app:
+    name: Build and smoke-test OpenCut.app
+    runs-on: macos-15
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: apps/reels
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Unit tests
+        run: bun test
+
+      - name: Build OpenCut.app and DMG
+        run: bash macos/build.sh --dmg
+
+      - name: Engine starts the Studio
+        env:
+          OPENCUT_WORKSPACE: ${{ runner.temp }}/engine-ws
+        run: |
+          ENGINE=build/OpenCut.app/Contents/MacOS/opencut-engine
+          "$ENGINE" doctor || true
+          "$ENGINE" mcp-config | head -3
+          "$ENGINE" studio --port 4511 --no-autopilot &
+          for i in $(seq 1 40); do curl -sf localhost:4511/api/state >/dev/null && break; sleep 1; done
+          curl -sf localhost:4511/api/state | head -c 200; echo
+          curl -sf localhost:4511/ | grep -q '<div id="root">'
+          kill %1
+
+      - name: App launches its engine and stops it on quit
+        run: |
+          open build/OpenCut.app
+          for i in $(seq 1 60); do curl -sf localhost:4317/api/state >/dev/null && echo "engine up after ${i}s" && break; sleep 1; done
+          curl -sf localhost:4317/api/autopilot | head -c 300; echo
+          osascript -e 'quit app "OpenCut"'
+          sleep 6
+          if curl -sf localhost:4317/api/state >/dev/null; then echo "::error::engine still running after quitting the app"; exit 1; fi
+          echo "engine stopped with the app"
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenCut-macOS-arm64
+          path: apps/reels/build/OpenCut.dmg
+          retention-days: 30
+
+  e2e:
+    name: Auto-edit a real talking-head clip (whisper.cpp + Homebrew FFmpeg)
+    runs-on: macos-15
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: apps/reels
+    env:
+      OPENCUT_WORKSPACE: ${{ github.workspace }}/e2e-workspace
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: |
+          bun install --frozen-lockfile
+          brew install ffmpeg whisper-cpp
+
+      - name: Speech model and settings
+        run: |
+          mkdir -p "$OPENCUT_WORKSPACE/models"
+          curl -fsSL -o "$OPENCUT_WORKSPACE/models/ggml-base.en.bin" \
+            https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
+          echo '{"whisperModel":"ggml-base.en.bin","autopilot":{"director":"basic","notify":false}}' > "$OPENCUT_WORKSPACE/settings.json"
+
+      - name: Record a talking-head test clip with the macOS voice
+        run: |
+          say -o speech.aiff "[[slnc 800]] Hey everyone. [[slnc 1200]] Um, [[slnc 500]] today I want to show you how I edit my videos. [[slnc 1400]] So the first thing, [[slnc 600]] so the first thing is to cut out all the silences. [[slnc 1000]] The second thing is adding captions to every word. [[slnc 900]] Follow for more tips. [[slnc 1000]]"
+          ffmpeg -v error -f lavfi -i "testsrc2=s=1920x1080:r=30" -i speech.aiff -shortest \
+            -c:v libx264 -pix_fmt yuv420p -c:a aac talk.mp4
+          ffprobe -v error -show_entries format=duration -of csv=p=0 talk.mp4
+
+      - name: Doctor
+        run: bun src/cli.ts doctor
+
+      - name: Auto-edit end to end
+        run: |
+          bun src/cli.ts auto-edit talk.mp4
+          PROJECT="$(bun src/cli.ts list | head -1 | cut -d' ' -f1)"
+          bun src/cli.ts transcript "$PROJECT"
+          bun src/cli.ts show "$PROJECT"
+          ls -la "$OPENCUT_WORKSPACE/outbox"
+          OUT="$(ls "$OPENCUT_WORKSPACE"/outbox/*.mp4 | head -1)"
+          ffprobe -v error -show_entries stream=codec_name,width,height -show_entries format=duration -of compact "$OUT"
+          test -s "$OUT"
+
+      - name: Upload the finished reel
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-reel
+          path: |
+            e2e-workspace/outbox
+            e2e-workspace/projects/*/last-render.sh
+          retention-days: 14

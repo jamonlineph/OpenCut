@@ -4,8 +4,8 @@ import { basename, extname, resolve } from "node:path";
 import { Autopilot, listJobs, loadEnvFile, retryJob, runJob } from "./core/autopilot";
 import { doctor } from "./core/capabilities";
 import { directorLabel, pickDirector, reviseProject } from "./core/director";
+import { mcpSetupText } from "./core/connect";
 import { installLaunchAgent, uninstallLaunchAgent } from "./core/launchd";
-import { which } from "./core/exec";
 import { analyzeProject, createProject, editContext, listProjects, loadProject } from "./core/project";
 import { renderProject } from "./core/render/render";
 import { autoEdit, describeProject, listInbox } from "./core/service";
@@ -33,28 +33,7 @@ async function printDoctor() {
 }
 
 function mcpConfig() {
-  const bun = which("bun") ?? "bun";
-  const entry = resolve(import.meta.dir, "mcp/index.ts");
-  const json = JSON.stringify({ mcpServers: { opencut: { command: bun, args: [entry] } } }, null, 2);
-  console.log(`OpenCut MCP server: ${entry}
-
-── Claude Code ──────────────────────────────────────────
-claude mcp add --scope user opencut -- ${bun} ${entry}
-
-── Claude Desktop ───────────────────────────────────────
-Settings → Developer → Edit Config, then merge into claude_desktop_config.json:
-${json}
-
-── Codex (~/.codex/config.toml) ─────────────────────────
-[mcp_servers.opencut]
-command = "${bun}"
-args = ["${entry}"]
-tool_timeout_sec = 300
-
-── Antigravity ──────────────────────────────────────────
-Agent panel → … → MCP Servers → Manage → View raw config, then merge:
-${json}
-`);
+  console.log(mcpSetupText());
 }
 
 const HELP = `OpenCut Reels

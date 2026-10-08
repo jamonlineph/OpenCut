@@ -6,6 +6,7 @@ import { analyzeMedia, readAnalysis } from "../core/analysis";
 import { Autopilot, listJobs, loadEnvFile, retryJob } from "../core/autopilot";
 import { directorLabel, pickDirector, reviseProject } from "../core/director";
 import { doctor } from "../core/capabilities";
+import { clientsAvailable, connectClient, mcpSetupText, type AiClient } from "../core/connect";
 import { run, which } from "../core/exec";
 import type { EditOp } from "../core/ops";
 import { deleteProject, editContext, listProjects, listRevisions, loadProject, projectDir, readState, revertProject } from "../core/project";
@@ -13,12 +14,33 @@ import { captionChunks } from "../core/render/captions";
 import { isRendering, listRenders, renderProject } from "../core/render/render";
 import { AUTO_EDIT, editProject, ensureAnalyzed, listInbox, startProject } from "../core/service";
 import { frameSnap, keptWords, placeClips, resolveTime, totalDuration } from "../core/timeline";
-import { mediaKindOf, workspace } from "../core/workspace";
+import { downloadModel, MODELS, type ModelName } from "../core/setup";
+import { whisperBin } from "../core/transcribe";
+import { mediaKindOf, readSettings, workspace } from "../core/workspace";
 import index from "./index.html";
 
 const ws = workspace();
 loadEnvFile(ws);
-const port = Number(process.env.OPENCUT_STUDIO_PORT ?? 4317);
+const argValue = (name: string) => {
+  const i = process.argv.indexOf(name);
+  return i === -1 ? undefined : process.argv[i + 1];
+};
+const port = Number(argValue("--port") ?? process.env.OPENCUT_STUDIO_PORT ?? 4317);
+
+// When OpenCut.app starts the engine, quit together with the app even if it crashes.
+const parentPid = Number(argValue("--parent-pid") ?? 0);
+if (parentPid) {
+  setInterval(() => {
+    try {
+      process.kill(parentPid, 0);
+    } catch {
+      process.exit(0);
+    }
+  }, 3000);
+}
+
+/** First-run setup done from the Studio: downloading the speech model. */
+const setupState: { downloading: boolean; progress: number; error?: string } = { downloading: false, progress: 0 };
 
 // The Studio also runs the autopilot, so anything dropped into the auto-edit
 // folder (or onto the Studio with auto-edit on) is edited automatically.
@@ -155,6 +177,54 @@ const server = Bun.serve({
         })),
     },
     "/api/doctor": { GET: () => handle(() => doctor(ws)) },
+    "/api/setup": {
+      GET: () =>
+        handle(async () => {
+          const settings = readSettings(ws);
+          const model = join(ws.models, settings.whisperModel);
+          const ffmpeg = (await doctor(ws)).find((c) => c.name === "FFmpeg")?.ok ?? false;
+          return {
+            ffmpeg,
+            whisper: Boolean(whisperBin()),
+            brew: Boolean(which("brew")),
+            model: { file: settings.whisperModel, installed: existsSync(model), ...setupState },
+            director: directorLabel(pickDirector(ws)),
+          };
+        }),
+    },
+    "/api/setup/model": {
+      POST: (req) =>
+        handle(async () => {
+          const { model } = (await req.json().catch(() => ({}))) as { model?: ModelName };
+          const name = model && MODELS[model] ? model : "large-v3-turbo-q5_0";
+          if (setupState.downloading) return { ok: true };
+          Object.assign(setupState, { downloading: true, progress: 0, error: undefined });
+          downloadModel(ws, name, () => {}, (p) => (setupState.progress = p))
+            .catch((e) => (setupState.error = e instanceof Error ? e.message : String(e)))
+            .finally(() => (setupState.downloading = false));
+          return { ok: true };
+        }),
+    },
+    "/api/setup/brew": {
+      // Opens Terminal with the Homebrew command, so nobody has to type it.
+      POST: () =>
+        handle(async () => {
+          const osascript = which("osascript");
+          if (!osascript) throw new Error("Open Terminal and run: brew install ffmpeg whisper-cpp");
+          const cmd = which("brew")
+            ? "brew install ffmpeg whisper-cpp"
+            : '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" && brew install ffmpeg whisper-cpp';
+          await run([osascript, "-e", `tell application "Terminal" to do script ${JSON.stringify(cmd)}`, "-e", 'tell application "Terminal" to activate']);
+        }),
+    },
+    "/api/connect": {
+      GET: () => handle(() => ({ clients: clientsAvailable(), text: mcpSetupText() })),
+      POST: (req) =>
+        handle(async () => {
+          const { client } = (await req.json()) as { client: AiClient };
+          return { message: await connectClient(client) };
+        }),
+    },
     "/api/autopilot": {
       GET: () =>
         handle(() => {

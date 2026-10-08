@@ -1,5 +1,6 @@
 {
   "name": "@opencut/reels",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,7 +12,8 @@
     "setup": "bun src/cli.ts setup",
     "doctor": "bun src/cli.ts doctor",
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "app": "bash macos/build.sh --install"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.132.1",

@@ -1,6 +1,7 @@
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 
 import { run, which } from "../exec";
+import { selfCommand } from "../runtime";
 import type { AutopilotSettings, Workspace } from "../workspace";
 import { writeJson } from "../workspace";
 
@@ -10,8 +11,6 @@ import { writeJson } from "../workspace";
 
 export type AgentKind = "claude-code" | "codex";
 
-const MCP_ENTRY = resolve(import.meta.dir, "../../mcp/index.ts");
-
 export function agentAvailable(kind: AgentKind): boolean {
   return Boolean(which(kind === "claude-code" ? "claude" : "codex"));
 }
@@ -19,15 +18,14 @@ export function agentAvailable(kind: AgentKind): boolean {
 /** Writes the MCP config the agent should load and returns its path. */
 export function writeMcpConfig(ws: Workspace): string {
   const file = join(ws.autopilot, "mcp.json");
-  writeJson(file, {
-    mcpServers: { opencut: { command: which("bun") ?? process.execPath, args: [MCP_ENTRY], env: { OPENCUT_WORKSPACE: ws.root } } },
-  });
+  const [command, ...args] = selfCommand("mcp");
+  writeJson(file, { mcpServers: { opencut: { command, args, env: { OPENCUT_WORKSPACE: ws.root } } } });
   return file;
 }
 
 export function agentCommand(ws: Workspace, kind: AgentKind, settings: AutopilotSettings, prompt: string): string[] {
   const mcpConfig = writeMcpConfig(ws);
-  const bun = which("bun") ?? process.execPath;
+  const [mcpCommand, ...mcpArgs] = selfCommand("mcp");
   const fill = (parts: string[]) => parts.map((p) => p.replaceAll("{prompt}", prompt).replaceAll("{mcpConfig}", mcpConfig));
   if (settings.agentCommand.length) return fill(settings.agentCommand);
   if (kind === "claude-code") {
@@ -48,9 +46,9 @@ export function agentCommand(ws: Workspace, kind: AgentKind, settings: Autopilot
     "exec",
     "--skip-git-repo-check",
     "-c",
-    `mcp_servers.opencut.command=${JSON.stringify(bun)}`,
+    `mcp_servers.opencut.command=${JSON.stringify(mcpCommand)}`,
     "-c",
-    `mcp_servers.opencut.args=[${JSON.stringify(MCP_ENTRY)}]`,
+    `mcp_servers.opencut.args=[${mcpArgs.map((a) => JSON.stringify(a)).join(",")}]`,
     "-c",
     `mcp_servers.opencut.env={OPENCUT_WORKSPACE=${JSON.stringify(ws.root)}}`,
     "-c",

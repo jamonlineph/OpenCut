@@ -216,7 +216,13 @@ a { color: var(--accent-2); }
 .ai-status.done { border-left: 3px solid var(--ok); }
 .ai-status.error { border-left: 3px solid var(--danger); }
 textarea { width: 100%; resize: vertical; }
-.home { padding: 40px; max-width: 760px; }
+.home { padding: 40px; max-width: 760px; overflow-y: auto; }
+.card { border: 1px solid var(--border); background: var(--panel); border-radius: var(--radius); padding: 16px 18px; margin-bottom: 20px; }
+.card h3 { margin: 0 0 8px; }
+.card.setup { border-color: var(--accent); }
+.step { display: grid; grid-template-columns: 24px 1fr; gap: 8px; padding: 8px 0; }
+.step .row { margin-top: 6px; }
+details.checks summary { cursor: pointer; color: var(--muted); margin: 8px 0; }
 .home h2 { margin-top: 0; }
 .checks div { padding: 3px 0; }
 .home code { background: var(--panel-2); padding: 2px 6px; border-radius: 5px; }

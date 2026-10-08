@@ -188,7 +188,7 @@ function App() {
         {route ? (
           <ProjectScreen key={route} id={route} state={state} notify={notify} onDeleted={() => (go(null), refresh())} />
         ) : (
-          <Home state={state} />
+          <Home state={state} notify={notify} />
         )}
       </main>
       {dragging && (
@@ -427,13 +427,121 @@ function AutopilotPanel(props: {
 
 // ───────────────────────── home
 
-function Home({ state }: { state: StudioState | null }) {
+type SetupInfo = {
+  ffmpeg: boolean;
+  whisper: boolean;
+  brew: boolean;
+  model: { file: string; installed: boolean; downloading: boolean; progress: number; error?: string };
+  director: string;
+};
+
+function SetupCard({ notify }: { notify: (t: string, err?: boolean) => void }) {
+  const [setup, setSetup] = useState<SetupInfo | null>(null);
+  const load = useCallback(() => api<SetupInfo>("/api/setup").then(setSetup).catch(() => {}), []);
+  useEffect(() => {
+    load();
+    const t = window.setInterval(load, 2000);
+    return () => window.clearInterval(t);
+  }, [load]);
+  if (!setup) return null;
+  const toolsReady = setup.ffmpeg && setup.whisper;
+  if (toolsReady && setup.model.installed) return null;
+  const post = (path: string) => api(path, { method: "POST", body: {} }).then(load).catch((e) => notify(e.message, true));
+  return (
+    <div className="card setup">
+      <h3>Finish setting up</h3>
+      <div className="step">
+        <span>{toolsReady ? "✅" : "1."}</span>
+        <div>
+          <b>Video and speech tools</b> (FFmpeg and whisper.cpp, free, from Homebrew)
+          {!toolsReady && (
+            <div className="row">
+              <button className="primary" onClick={() => post("/api/setup/brew")}>
+                {setup.brew ? "Install in Terminal" : "Install Homebrew + tools in Terminal"}
+              </button>
+              <span className="hint">Terminal opens and runs it; come back when it finishes.</span>
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="step">
+        <span>{setup.model.installed ? "✅" : "2."}</span>
+        <div>
+          <b>Speech model</b> (about 550 MB, runs on your Mac)
+          {!setup.model.installed && (
+            <div className="row">
+              {setup.model.downloading ? (
+                <>
+                  <span className="progress" style={{ width: 200 }}>
+                    <div style={{ width: `${setup.model.progress * 100}%` }} />
+                  </span>
+                  <span className="hint">{Math.round(setup.model.progress * 100)}%</span>
+                </>
+              ) : (
+                <button className="primary" onClick={() => post("/api/setup/model")}>
+                  Download
+                </button>
+              )}
+              {setup.model.error && <span className="hint" style={{ color: "var(--danger)" }}>{setup.model.error}</span>}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ConnectCard({ notify }: { notify: (t: string, err?: boolean) => void }) {
+  const [info, setInfo] = useState<{ clients: Record<string, boolean>; text: string } | null>(null);
+  const [busy, setBusy] = useState("");
+  const [showConfig, setShowConfig] = useState(false);
+  useEffect(() => {
+    api<typeof info>("/api/connect").then(setInfo).catch(() => {});
+  }, []);
+  if (!info) return null;
+  const connect = async (client: string) => {
+    setBusy(client);
+    try {
+      const r = await api<{ message: string }>("/api/connect", { method: "POST", body: { client } });
+      notify(r.message);
+    } catch (e) {
+      notify((e as Error).message, true);
+    } finally {
+      setBusy("");
+    }
+  };
+  const clients: [string, string][] = [
+    ["claude-code", "Claude Code"],
+    ["claude-desktop", "Claude Desktop"],
+    ["codex", "Codex"],
+  ];
+  return (
+    <div className="card">
+      <h3>Edit by chatting with your AI</h3>
+      <p className="hint">Connect OpenCut to your AI app, then ask it things like “make a reel from my newest video” or “cut the 3 best moments from podcast.mp4”.</p>
+      <div className="row">
+        {clients.map(([id, label]) => (
+          <button key={id} disabled={!info.clients[id] || busy !== ""} title={info.clients[id] ? "" : `${label} isn't installed`} onClick={() => connect(id)}>
+            {busy === id ? "Connecting…" : `Connect ${label}`}
+          </button>
+        ))}
+        <button className="ghost" onClick={() => setShowConfig(!showConfig)}>
+          {showConfig ? "Hide" : "Antigravity / manual setup"}
+        </button>
+      </div>
+      {showConfig && <textarea readOnly rows={14} value={info.text} style={{ marginTop: 8, fontFamily: "ui-monospace, monospace", fontSize: 12 }} />}
+    </div>
+  );
+}
+
+function Home({ state, notify }: { state: StudioState | null; notify: (t: string, err?: boolean) => void }) {
   const [checks, setChecks] = useState<{ name: string; ok: boolean; detail: string; fix?: string }[] | null>(null);
   useEffect(() => {
     api<typeof checks>("/api/doctor").then(setChecks).catch(() => {});
   }, []);
   return (
     <div className="home">
+      <SetupCard notify={notify} />
       <h2>Make a reel</h2>
       <h3>Hands-free</h3>
       <ol>
@@ -455,8 +563,9 @@ function Home({ state }: { state: StudioState | null }) {
       <p className="hint">
         Your editing rules and “about me” for the AI live in <code>{state?.root}/STYLE.md</code>.
       </p>
-      <h3>Setup check</h3>
-      <div className="checks">
+      <ConnectCard notify={notify} />
+      <details className="checks">
+        <summary>System check</summary>
         {!checks && <div className="hint">Checking…</div>}
         {checks?.map((c) => (
           <div key={c.name}>
@@ -468,7 +577,7 @@ function Home({ state }: { state: StudioState | null }) {
             )}
           </div>
         ))}
-      </div>
+      </details>
     </div>
   );
 }

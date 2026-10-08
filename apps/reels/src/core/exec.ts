@@ -3,7 +3,17 @@ import { delimiter, join } from "node:path";
 
 // GUI apps on macOS (Claude Desktop, Antigravity) launch MCP servers with a
 // minimal PATH that leaves out Homebrew, so look in the usual places too.
-const EXTRA_BIN_DIRS = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", join(process.env.HOME ?? "", ".bun/bin")];
+const HOME = process.env.HOME ?? "";
+const EXTRA_BIN_DIRS = [
+  "/opt/homebrew/bin",
+  "/usr/local/bin",
+  "/usr/bin",
+  "/bin",
+  join(HOME, ".bun/bin"),
+  join(HOME, ".local/bin"), // Claude Code's native installer
+  join(HOME, ".claude/local"),
+  join(HOME, ".npm-global/bin"),
+];
 
 const found = new Map<string, string | null>();
 

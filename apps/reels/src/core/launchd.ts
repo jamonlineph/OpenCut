@@ -1,8 +1,9 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 
 import { run, which } from "./exec";
+import { selfCommand } from "./runtime";
 import type { Workspace } from "./workspace";
 
 // Runs OpenCut Studio (and with it the auto-edit autopilot) at login on macOS,
@@ -13,8 +14,7 @@ const plistPath = () => join(homedir(), "Library", "LaunchAgents", `${LABEL}.pli
 const xml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 export function launchAgentPlist(ws: Workspace): string {
-  const bun = which("bun") ?? process.execPath;
-  const server = resolve(import.meta.dir, "../studio/server.ts");
+  const program = selfCommand("studio");
   const env: Record<string, string> = {
     PATH: ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", join(homedir(), ".bun", "bin"), join(homedir(), ".local", "bin")].join(":"),
     OPENCUT_WORKSPACE: ws.root,
@@ -30,11 +30,10 @@ export function launchAgentPlist(ws: Workspace): string {
     <string>${LABEL}</string>
     <key>ProgramArguments</key>
     <array>
-      <string>${xml(bun)}</string>
-      <string>${xml(server)}</string>
+${program.map((a) => `      <string>${xml(a)}</string>`).join("\n")}
     </array>
     <key>WorkingDirectory</key>
-    <string>${xml(resolve(import.meta.dir, "../.."))}</string>
+    <string>${xml(ws.root)}</string>
     <key>EnvironmentVariables</key>
     <dict>
 ${envXml}

@@ -106,6 +106,8 @@ export function loadEnvFile(ws: Workspace) {
 }
 
 async function notify(title: string, message: string) {
+  // Inside OpenCut.app, the app shows native notifications itself.
+  if (process.env.OPENCUT_NOTIFY === "app") return;
   const osascript = which("osascript");
   if (!osascript) return;
   const esc = (s: string) => s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');

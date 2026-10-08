@@ -15,7 +15,12 @@ export type ModelName = keyof typeof MODELS;
 
 const BASE_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
 
-export async function downloadModel(ws: Workspace, name: ModelName, log: (msg: string) => void = console.log) {
+export async function downloadModel(
+  ws: Workspace,
+  name: ModelName,
+  log: (msg: string) => void = console.log,
+  onProgress?: (fraction: number) => void,
+) {
   const model = MODELS[name];
   const dest = join(ws.models, model.file);
   if (existsSync(dest)) {
@@ -33,6 +38,7 @@ export async function downloadModel(ws: Workspace, name: ModelName, log: (msg: s
       for await (const chunk of response.body) {
         out.write(chunk);
         received += chunk.length;
+        if (total) onProgress?.(received / total);
         const pct = total ? Math.floor((received / total) * 100) : -1;
         if (pct !== lastPct && pct % 5 === 0) {
           log(`  ${pct}%`);
